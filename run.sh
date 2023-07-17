@@ -1,9 +1,9 @@
 #!/bin/sh
-#SBATCH --job-name=bedadm # create a short name for your job
-#SBATCH --output=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.out # create a output file
-#SBATCH --error=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.err # create a error file
-#SBATCH --partition=research # choose partition
-#SBATCH --gpus-per-node=5
+#SBATCH --job-name=run # create a short name for your job
+#SBATCH --output=/lustre/scratch/client/vinai/users/ngocbh8/quan/cnf_flow/slurms/slurm_%A.out # create a output file
+#SBATCH --error=/lustre/scratch/client/vinai/users/ngocbh8/quan/cnf_flow/slurms/slurm_%A.err # create a error file
+#SBATCH --partition=applied # choose partition
+#SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=32 # 80
 #SBATCH --mem-per-gpu=32GB
 #SBATCH --nodes=1
@@ -79,14 +79,15 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 #     --save_content --save_content_every 10 \
 #     --master_port $MASTER_PORT --num_process_per_node 8 --resume \
 
-accelerate launch --multi_gpu --num_processes 7 --mixed_precision fp16 --main_process_port 28500 train_flow_latent_faster.py --exp laflo_imnet_f8_adm_crossattn \
+accelerate launch --multi_gpu --num_processes 8 --mixed_precision fp16 --main_process_port 28500 train_flow_latent_faster.py --exp laflo_imnet_f8_adm_crossattn \
     --dataset imagenet_256 --datadir ./data/imagenet/ \
-    --batch_size 128 --num_epoch 1800 --label_dim 1000 \
+    --batch_size 80 --num_epoch 1800 --label_dim 1000 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
     --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
     --lr 1e-4 --scale_factor 0.18215 --no_lr_decay \
     --model_type adm_context --num_classes 1000 --label_dropout 0.1 \
     --save_content --save_content_every 5 \
+    --resume \
 
 
 ############################################### DiT-B/2 ~ IMNET 256 ###############################################
