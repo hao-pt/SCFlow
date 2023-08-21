@@ -10,6 +10,7 @@ import torch
 import numpy as np
 # from torchdiffeq import odeint
 from torchdiffeq import odeint_adjoint as odeint
+import ot
 import os
 import torch.nn as nn
 import torch.nn.functional as F
@@ -103,11 +104,26 @@ def train(rank, gpu, args):
             x_1 = x.to(device, non_blocking=True)
             model.zero_grad()
             #sample t
-            t = torch.rand((x_1.size(0),) , device=device)
+            t = torch.rand((x_1.size(0),), device=device)
             t = t.view(-1, 1, 1, 1)
             x_0 = torch.randn_like(x_1)
-            v_t = (1 - t) * x_1 + (1e-5 + (1 - 1e-5) * t) * x_0
-            u = (1 - 1e-5) * x_0 - x_1
+
+            # Minibatch OT in multisample flow matching (Pooladian et al 2023)
+            if args.minibatch_ot:
+                # ot.dist only works with (n_samples, n_features) tensor, therefore we use flatten
+                M = ot.dist(x_1.flatten(1), x_0.flatten(1))
+                M = M / M.max()  # normalize
+                # we assume data and noise on uniform weights
+                a, b = torch.ones(batch_size) / batch_size, torch.ones(batch_size) / batch_size
+                Pi = ot.emd(a, b, M)  # unregularized OT plan, equivalent to permutation matrix 
+                # with OT plan we can define which noise matched with which sample
+                matched_indices = torch.where(Pi != 0)[1]
+                sorted_x_0 = x_0[torch.sort(matched_indices)[1]]
+                v_t = (1 - t) * x_1 + (1e-5 + (1 - 1e-5) * t) * sorted_x_0
+                u = (1 - 1e-5) * sorted_x_0 - x_1
+            else:
+                v_t = (1 - t) * x_1 + (1e-5 + (1 - 1e-5) * t) * x_0
+                u = (1 - 1e-5) * x_0 - x_1
             
             loss = F.mse_loss(model(t.squeeze(), v_t), u)
             loss.backward()
