@@ -36,14 +36,17 @@ export PYTHONFAULTHANDLER=1
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
 ############################################### ADM ~ CelebA 256 ###############################################
-# CUDA_VISIBLE_DEVICES=1 python train_flow_latent.py --exp laflo_celeba_f8_lr2e-5_bs32 \
-#     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-#     --batch_size 32 --num_epoch 500 \
-#     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-#     --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
-#     --lr 2e-5 --scale_factor 0.18215 \
-#     --save_content --save_content_every 10 \
-#     --master_port $MASTER_PORT
+CUDA_VISIBLE_DEVICES=0,2 python train_flow_latent.py --exp laflo_celeba_f8_lr2e-5_bs32x2 \
+    --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
+    --batch_size 32 --num_epoch 500 \
+    --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
+    --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
+    --use_origin_adm \
+    --num_head_channels 32 \
+    --lr 2e-5 --scale_factor 0.18215 \
+    --save_content --save_content_every 10 \
+    --master_port $MASTER_PORT \
+    --use_ema \
 
 
 ############################################### ADM ~ FFHQ 256 ###############################################
@@ -79,15 +82,15 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 #     --save_content --save_content_every 10 \
 #     --master_port $MASTER_PORT --num_process_per_node 8 --resume \
 
-accelerate launch --multi_gpu --num_processes 8 --mixed_precision fp16 --main_process_port 28500 train_flow_latent_faster.py --exp laflo_imnet_f8_adm_crossattn \
-    --dataset imagenet_256 --datadir ./data/imagenet/ \
-    --batch_size 80 --num_epoch 1800 --label_dim 1000 \
-    --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-    --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
-    --lr 1e-4 --scale_factor 0.18215 --no_lr_decay \
-    --model_type adm_context --num_classes 1000 --label_dropout 0.1 \
-    --save_content --save_content_every 5 \
-    --resume \
+# accelerate launch --multi_gpu --num_processes 8 --mixed_precision fp16 --main_process_port 28500 train_flow_latent_faster.py --exp laflo_imnet_f8_adm_crossattn \
+#     --dataset imagenet_256 --datadir ./data/imagenet/ \
+#     --batch_size 80 --num_epoch 1800 --label_dim 1000 \
+#     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
+#     --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
+#     --lr 1e-4 --scale_factor 0.18215 --no_lr_decay \
+#     --model_type adm_context --num_classes 1000 --label_dropout 0.1 \
+#     --save_content --save_content_every 5 \
+#     --resume \
 
 
 ############################################### DiT-B/2 ~ IMNET 256 ###############################################
