@@ -165,7 +165,7 @@ class ConsistencyFlow(RectifiedFlow):
 				now_z_t = pre_z_t - (1/self.TN) * self.pretrained_model(pre_z_t,t)
 				now_t = torch.clamp(t - (1/self.TN), 1/self.TN, 1)
 		else:
-			now_z_t = pre_z_t - (1/self.TN) * ((1 - 1e-5) * z1 - z0)
+			now_z_t = pre_z_t - (1/self.TN) * (z1 - z0)
 		now_t = torch.clamp(t - (1/self.TN), 1/self.TN, 1)
 		
 		pred_z_t = self.model(t, pre_z_t)
