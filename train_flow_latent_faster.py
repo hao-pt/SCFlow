@@ -227,7 +227,7 @@ if __name__ == '__main__':
                             help="Model ckpt to init from")
 
     parser.add_argument('--model_type', type=str, default="adm",
-                            help='model_type', choices=['adm', 'ncsn++', 'ddpm++', 'DiT-B/2', 'DiT-L/2', 'DiT-L/4', 'DiT-XL/2'])
+                            help='model_type', choices=['adm', 'adm_context', 'ncsn++', 'ddpm++', 'DiT-B/2', 'DiT-L/2', 'DiT-L/4', 'DiT-XL/2'])
     parser.add_argument('--image_size', type=int, default=32,
                             help='size of image')
     parser.add_argument('--f', type=int, default=8,
