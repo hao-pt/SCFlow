@@ -101,8 +101,6 @@ def sample_from_model2(model, x, model_kwargs, generator, args):
     return sample
 
 
-
-
 def sample_and_test(rank, gpu, args):
     from diffusers.models import AutoencoderKL
     # torch.backends.cuda.matmul.allow_tf32 = True

@@ -8,6 +8,7 @@
 '''
 Codes adapted from https://github.com/NVlabs/LSGM/blob/main/util/ema.py
 '''
+import copy
 import warnings
 
 import torch
@@ -88,3 +89,27 @@ class EMA(Optimizer):
                     self.optimizer.state[p]['ema'] = tmp
                 else:
                     p.data = ema.detach()
+
+
+class EMAMODEL(object):
+    def __init__(self, model):
+        self.ema_model = copy.deepcopy(model)
+        for parameter in self.ema_model.parameters():
+            parameter.requires_grad_(False)
+        self.ema_model.eval()
+
+    @torch.no_grad()
+    def ema_step(self, decay_rate=0.9999, model=None):
+        for param, ema_param in zip(model.parameters(), self.ema_model.parameters()):
+            ema_param.data.mul_(decay_rate).add_(param.data, alpha=1. - decay_rate)
+    
+    @torch.no_grad()
+    def ema_swap(self, model=None):
+        for param, ema_param in zip(self.ema_model.parameters(), model.parameters()):
+            tmp = param.data.detach()
+            param.data = ema_param.detach()
+            ema_param.data = tmp
+    
+    @torch.no_grad()
+    def __call__(self, t, z, **kwargs):
+        return self.ema_model(t, z, **kwargs)
