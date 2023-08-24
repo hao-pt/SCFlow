@@ -60,9 +60,9 @@ class BaseFlow():
 			if len(z1.shape) == 2:
 				if solver == 'heun':
 					raise NotImplementedError("Heun's method not implemented for 2D data.")
-				vt = self.model(z, t)
+				vt = self.model(t, z, **model_kwargs)
 			elif len(z1.shape) == 4:
-				vt = self.model(z, t.squeeze())
+				vt = self.model(t.squeeze(), z, **model_kwargs)
 				if solver == 'heun' and i > 1:
 					z_next = z.detach().clone() + vt * dt
 					vt_next = self.model(t_next.squeeze(), z_next, **model_kwargs)
@@ -83,9 +83,9 @@ class BaseFlow():
 			x = torch.from_numpy(x.reshape(dshape)).to(device).type(torch.float32)
 			vec_t = torch.ones(dshape[0], device=x.device) * t
 			if if_pred_x0:
-				vt = z1 - self.model(x,vec_t)
+				vt = z1 - self.model(vec_t, x)
 			else:
-				vt = self.model(x, vec_t)
+				vt = self.model(vec_t, x)
 			vt = vt.detach().cpu().numpy().reshape(-1)
 			return vt
 		solution = integrate.solve_ivp(ode_func, (1, eps), z1.detach().cpu().numpy().reshape(-1), method=solver, rtol = rtol, atol = atol)
