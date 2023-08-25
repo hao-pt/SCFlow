@@ -57,6 +57,7 @@ accelerate launch --num_processes 1 --main_process_port 28500 train_consistent_f
     --use_origin_adm \
     --num_head_channels 64 \
     --lr 2e-5 --scale_factor 0.18215 \
+    --num_timesteps 200 \
     --target_ema_decay 0.95 \
     --save_content --save_content_every 10 \
 

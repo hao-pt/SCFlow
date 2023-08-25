@@ -141,7 +141,7 @@ def train(args):
     model.train()
     data_loader, model, optimizer, scheduler = accelerator.prepare(data_loader, model, optimizer, scheduler)
 
-    flow = ConsistencyFlow(device, model=model, ema_model=target_ema, TN=args.steps, discrete=args.discrete_timesteps)
+    flow = ConsistencyFlow(device, model=model, ema_model=target_ema, TN=args.num_timesteps, discrete=args.discrete_timesteps)
 
     if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
@@ -325,13 +325,12 @@ if __name__ == '__main__':
     parser.add_argument('--exp', default='experiment_cifar_default', help='name of experiment')
     parser.add_argument('--dataset', default='cifar10', help='name of dataset')
     parser.add_argument('--datadir', default='./data')
-    parser.add_argument('--num_timesteps', type=int, default=200)
     parser.add_argument('--use_grad_checkpointing', action='store_true', default=False,
         help="Enable gradient checkpointing for mem saving")
 
     parser.add_argument('--batch_size', type=int, default=128, help='input batch size')
     parser.add_argument('--num_epoch', type=int, default=1200)
-    parser.add_argument('--steps', type=int, default=40)
+    parser.add_argument('--num_timesteps', type=int, default=200)
     parser.add_argument('--discrete_timesteps', action='store_true', default=False)
 
     parser.add_argument('--lr', type=float, default=5e-4, help='learning rate g')
