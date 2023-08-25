@@ -118,7 +118,8 @@ def train(args):
     model = create_network(args).to(device, dtype=dtype)
     if args.use_grad_checkpointing and "DiT" in args.model_type:
         model.set_gradient_checkpointing()
-    ema = EMAMODEL(model)  # Create an EMA of the model for use after training
+    target_ema = EMAMODEL(model)  # Create an EMA of the model for use after training
+    ema = EMAMODEL(model)
     # requires_grad(ema, False)
 
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device, dtype=dtype)
@@ -134,13 +135,13 @@ def train(args):
     #     optimizer = EMA(optimizer, ema_decay=args.ema_decay)
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epoch, eta_min=1e-5)
-
-    # update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
-    ema.ema_step(decay_rate=0, model=model)
+    # Ensure EMA is initialized with synced weights
+    ema.ema_step(decay_rate=0, model=model)  
+    target_ema.ema_step(decay_rate=0, model=model)
     model.train()
     data_loader, model, optimizer, scheduler = accelerator.prepare(data_loader, model, optimizer, scheduler)
 
-    flow = ConsistencyFlow(device, model=model, ema_model=ema, TN=args.steps)
+    flow = ConsistencyFlow(device, model=model, ema_model=target_ema, TN=args.num_timesteps, discrete=args.discrete_timesteps)
 
     if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
@@ -148,7 +149,7 @@ def train(args):
         init_epoch = checkpoint['epoch']
         epoch = init_epoch
         model.load_state_dict(checkpoint['model_dict'])
-        ema.load_state_dict(checkpoint['ema_model_dict'])
+        ema.ema_model.load_state_dict(checkpoint['ema_model_dict'])
         # load G
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
@@ -197,7 +198,7 @@ def train(args):
             # z_t = (1 - (1 - 1e-5) * t) * z_0 + t * z_1
             # u = z_1 - (1 - 1e-5) * z_0
             z_t, t, u = flow.get_train_tuple_flow(z_0, z_1)
-            v = model(t, z_t, y)
+            v = flow.model(t, z_t, y)
             fm_loss = F.mse_loss(v, u)
 
             # v_target = ema(t.squeeze(), z_t, y)
@@ -207,8 +208,10 @@ def train(args):
             loss = fm_loss + con_loss
             accelerator.backward(loss)
             optimizer.step()
-            # update_ema(ema, model if accelerator.num_processes == 1 else model.module)
-            flow.ema_model.ema_step(args.ema_decay, model if accelerator.num_processes == 1 else model.module)
+
+            # update ema models
+            ema.ema_step(args.ema_decay, model if accelerator.num_processes == 1 else model.module)
+            flow.ema_model.ema_step(args.target_ema_decay, model if accelerator.num_processes == 1 else model.module)
 
             global_step += 1
             log_steps += 1
@@ -232,7 +235,7 @@ def train(args):
                     rand = torch.randn_like(z_0)[:4]
                     if y is not None:
                         y = y[:4]
-                    sample_model = partial(model if accelerator.num_processes == 1 else model.module, y=y)
+                    sample_model = partial(flow.model if accelerator.num_processes == 1 else flow.model.module, y=y)
                     # sample_func = lambda t, x: model(t, x, y=y)
                     # fake_sample = sample_from_model(sample_model, rand)[-1]
                     fake_sample = flow.sample_ode_generative(rand)[0][-1]
@@ -245,17 +248,17 @@ def train(args):
                 if epoch % args.save_content_every == 0:
                     logger.info('Saving content.')
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
-                               'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                               'model_dict': flow.model.state_dict(), 'optimizer': optimizer.state_dict(),
                                'scheduler': scheduler.state_dict(),
-                               'ema_model_dict': flow.ema_model.ema_model.state_dict(),
+                               'ema_model_dict': ema.ema_model.state_dict(),
                                }
 
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
                 torch.save({
-                    "model": model.state_dict(), 
-                    "ema_model": flow.ema_model.ema_model.state_dict(),
+                    "model": flow.model.state_dict(), 
+                    "ema_model": ema.ema_model.state_dict(),
                 }, os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
 
 
@@ -322,13 +325,13 @@ if __name__ == '__main__':
     parser.add_argument('--exp', default='experiment_cifar_default', help='name of experiment')
     parser.add_argument('--dataset', default='cifar10', help='name of dataset')
     parser.add_argument('--datadir', default='./data')
-    parser.add_argument('--num_timesteps', type=int, default=200)
     parser.add_argument('--use_grad_checkpointing', action='store_true', default=False,
         help="Enable gradient checkpointing for mem saving")
 
     parser.add_argument('--batch_size', type=int, default=128, help='input batch size')
     parser.add_argument('--num_epoch', type=int, default=1200)
-    parser.add_argument('--steps', type=int, default=40)
+    parser.add_argument('--num_timesteps', type=int, default=200)
+    parser.add_argument('--discrete_timesteps', action='store_true', default=False)
 
     parser.add_argument('--lr', type=float, default=5e-4, help='learning rate g')
 
@@ -337,7 +340,8 @@ if __name__ == '__main__':
     parser.add_argument('--beta2', type=float, default=0.9,
                             help='beta2 for adam')
     parser.add_argument('--no_lr_decay',action='store_true', default=False)
-    parser.add_argument('--ema_decay', type=float, default=0.9999, help='decay rate for EMA')
+    parser.add_argument('--ema_decay', type=float, default=0.9999, help='decay rate for EMA model')
+    parser.add_argument('--target_ema_decay', type=float, default=0.95, help='decay rate for target EMA model')
 
     parser.add_argument('--save_content', action='store_true', default=False)
     parser.add_argument('--save_content_every', type=int, default=10, help='save content for resuming every x epochs')
