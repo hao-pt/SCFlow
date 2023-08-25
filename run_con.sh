@@ -1,9 +1,9 @@
 #!/bin/sh
 #SBATCH --job-name=run # create a short name for your job
-#SBATCH --output=/lustre/scratch/client/vinai/users/ngocbh8/quan/cnf_flow/slurms/slurm_%A.out # create a output file
-#SBATCH --error=/lustre/scratch/client/vinai/users/ngocbh8/quan/cnf_flow/slurms/slurm_%A.err # create a error file
-#SBATCH --partition=applied # choose partition
-#SBATCH --gpus-per-node=8
+#SBATCH --output=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.out # create a output file
+#SBATCH --error=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.err # create a error file
+#SBATCH --partition=research # choose partition
+#SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=32 # 80
 #SBATCH --mem-per-gpu=32GB
 #SBATCH --nodes=1
@@ -49,9 +49,9 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 #     --use_ema \
 
 # --multi_gpu 
-accelerate launch --num_processes 1 --main_process_port 28500 train_consistent_flow_faster.py --exp celeba_f8_lr2e-5_t3 \
+accelerate launch --num_processes 1 --main_process_port 28501 train_consistent_flow_faster.py --exp celeba_f8_lr2e-5_onlyconloss \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-    --batch_size 32 --num_epoch 500 \
+    --batch_size 96 --num_epoch 500 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
     --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
     --use_origin_adm \
