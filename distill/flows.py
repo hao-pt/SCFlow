@@ -145,7 +145,7 @@ class ConsistencyFlow(RectifiedFlow):
 		self.TN = TN
 		self.device = device
 
-	def get_train_tuple(self, z0=None, z1=None, t=None, eps=1e-5):
+	def get_train_tuple(self, z0=None, z1=None, t=None, eps=1e-5, model_kwargs={}):
 		if t is None:
 			if self.discrete:
 				t = torch.randint(1, self.TN+1, (z0.shape[0],)).to(z1.device).float() / self.TN
@@ -162,18 +162,16 @@ class ConsistencyFlow(RectifiedFlow):
 		
 		if self.pretrained_model is not None:
 			with torch.no_grad():
-				now_z_t = pre_z_t - (1/self.TN) * self.pretrained_model(pre_z_t,t)
+				now_z_t = pre_z_t - (1/self.TN) * self.pretrained_model(t, pre_z_t, y=model_kwargs.get("y", None))
 				now_t = torch.clamp(t - (1/self.TN), 1/self.TN, 1)
 		else:
 			now_z_t = pre_z_t - (1/self.TN) * (z1 - z0)
 		now_t = torch.clamp(t - (1/self.TN), 1/self.TN, 1)
 		
-		pred_z_t = self.model(t, pre_z_t)
+		pred_z_t = self.model(t, pre_z_t, **model_kwargs)
 		with torch.no_grad():
-			gt_z_t = self.ema_model(now_t, now_z_t)
+			gt_z_t = self.ema_model(now_t, now_z_t, **model_kwargs)
 		return pred_z_t, gt_z_t
-	
-
 
   
 class ProgDistFlow(RectifiedFlow):
