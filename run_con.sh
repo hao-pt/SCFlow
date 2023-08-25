@@ -49,14 +49,15 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 #     --use_ema \
 
 # --multi_gpu 
-accelerate launch --num_processes 1 --main_process_port 28500 train_consistent_flow_faster.py --exp celeba_f8_lr2e-5_t3 \
+accelerate launch --num_processes 1 --main_process_port 28500 train_consistent_flow_faster.py --exp celeba_f8_lr2e-5_t1 \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
     --batch_size 32 --num_epoch 500 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-    --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
+    --nf 192 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 3 \
     --use_origin_adm \
-    --num_head_channels 32 \
+    --num_head_channels 64 \
     --lr 2e-5 --scale_factor 0.18215 \
+    --target_ema_decay 0.95 \
     --save_content --save_content_every 10 \
 
 
