@@ -37,6 +37,7 @@ from accelerate.utils import set_seed
 from accelerate.logging import get_logger
 
 from distill.flows import ConsistencyFlow
+from models.augment import AugmentPipe
 
 
 def copy_source(file, output_dir):
@@ -103,8 +104,9 @@ def train(args):
             level=logging.INFO,
             handlers=[logging.StreamHandler(), logging.FileHandler(f"{exp_path}/log.txt")]
         )
-        logger.info(accelerator.state, main_process_only=False)
         logger.info(f"Exp path: {exp_path}")
+
+    logger.info(accelerator.state, main_process_only=False)
 
     batch_size = args.batch_size
     dataset = get_dataset(args)
@@ -114,6 +116,10 @@ def train(args):
                                                num_workers=4,
                                                pin_memory=True,
                                                drop_last=True)
+
+    augment_pipe = AugmentPipe(p=args.augment, xflip=1e8, yflip=1, scale=1, rotate_frac=1, aniso=1, translate_frac=1) if args.augment else None
+    if args.augment:
+        args.augment_dim = 9
 
     model = create_network(args).to(device, dtype=dtype)
     if args.use_grad_checkpointing and "DiT" in args.model_type:
@@ -182,6 +188,7 @@ def train(args):
         for iteration, (x, y) in enumerate(data_loader):
             x_0 = x.to(device, dtype=dtype, non_blocking=True)
             y = None if not use_label else y.to(device, non_blocking=True)
+            x_0, augment_labels = augment_pipe(x_0) if augment_pipe is not None else (x_0, None)
             model.zero_grad()
             if is_latent_data:
                 z_0 = x_0 * args.scale_factor
@@ -197,8 +204,9 @@ def train(args):
             # # alternative notation (similar to flow matching): 1 is data, 0 is real noise
             # z_t = (1 - (1 - 1e-5) * t) * z_0 + t * z_1
             # u = z_1 - (1 - 1e-5) * z_0
+            model_kwargs = {"y": y, "augment_labels": augment_labels}
             z_t, t, u = flow.get_train_tuple_flow(z_0, z_1)
-            v = flow.model(t, z_t, y)
+            v = flow.model(t, z_t, y, augment_labels)
             fm_loss = F.mse_loss(v, u)
 
             # v_target = ema(t.squeeze(), z_t, y)
@@ -210,8 +218,8 @@ def train(args):
             optimizer.step()
 
             # update ema models
-            ema.ema_step(args.ema_decay, model if accelerator.num_processes == 1 else model.module)
-            flow.ema_model.ema_step(args.target_ema_decay, model if accelerator.num_processes == 1 else model.module)
+            ema.ema_step(args.ema_decay, flow.model if accelerator.num_processes == 1 else flow.model.module)
+            flow.ema_model.ema_step(args.target_ema_decay, flow.model if accelerator.num_processes == 1 else flow.model.module)
 
             global_step += 1
             log_steps += 1
@@ -296,6 +304,7 @@ if __name__ == '__main__':
                             help='drop-out rate')
     parser.add_argument('--label_dim', type=int, default=0,
                             help='label dimension, 0 if unconditional')
+    parser.add_argument('--augment', type=float, default=0.)
     parser.add_argument('--augment_dim', type=int, default=0,
                             help='dimension of augmented label, 0 if not used')
     parser.add_argument('--num_classes', type=int, default=None,

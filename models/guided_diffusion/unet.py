@@ -450,6 +450,7 @@ class UNetModel(nn.Module):
         use_scale_shift_norm=False,
         resblock_updown=False,
         use_new_attention_order=False,
+        augment_dim=0, # Augmentation label dimensionality, 0 = no augmentation.
     ):
         super().__init__()
 
@@ -484,6 +485,8 @@ class UNetModel(nn.Module):
 
         if self.num_classes is not None:
             self.label_emb = nn.Embedding(num_classes, time_embed_dim)
+
+        self.augment_emb = linear(augment_dim, time_embed_dim) if augment_dim else None
 
         ch = input_ch = int(channel_mult[0] * model_channels)
         self.input_blocks = nn.ModuleList(
@@ -640,7 +643,7 @@ class UNetModel(nn.Module):
         self.middle_block.apply(convert_module_to_f32)
         self.output_blocks.apply(convert_module_to_f32)
 
-    def forward(self, timesteps, x, y=None, return_emb=False):
+    def forward(self, timesteps, x, y=None, augment_labels=None, return_emb=False):
         """
         Apply the model to an input batch.
 
@@ -666,6 +669,8 @@ class UNetModel(nn.Module):
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
+        if self.augment_emb is not None and augment_labels is not None:
+            emb = emb + self.augment_emb(augment_labels)
 
         h = x
         for module in self.input_blocks:

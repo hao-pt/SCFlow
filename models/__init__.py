@@ -62,6 +62,7 @@ def get_flow_model(config):
                         num_heads_upsample=config.num_head_upsample,
                         use_scale_shift_norm=config.use_scale_shift_norm,
                         resblock_updown=config.resblock_updown,
-                        use_new_attention_order=config.use_new_attention_order)
+                        use_new_attention_order=config.use_new_attention_order,
+                        augment_dim=config.augment_dim)
 
     return model
