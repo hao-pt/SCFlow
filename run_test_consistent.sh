@@ -38,7 +38,7 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 MODEL_TYPE=adm
 EPOCH_ID=450
 DATASET=celeba_256
-EXP=laflo_celeba_f8_lr2e-5_bs32x2
+EXP=celeba_f8_lr2e-5_150steps
 METHOD=euler
 STEPS=100
 USE_ORIGIN_ADM=True
@@ -51,11 +51,10 @@ if [[ ${USE_ORIGIN_ADM} == True ]]; then
         --use_origin_adm \
         --num_head_channels 64 \
         --master_port $MASTER_PORT --num_process_per_node 1 \
-        --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
-        --method ${METHOD} --num_steps 0 \
+        --use_karras_samplers \
+        --method ${METHOD} --num_steps ${STEPS} \
+        # --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
         # --measure_time \
-        # --use_karras_samplers \
-        # --method heun --step_size 50 \
         # --compute_nfe \
 
 else
