@@ -210,8 +210,11 @@ def train(args):
             fm_loss = F.mse_loss(v, u)
 
             # v_target = ema(t.squeeze(), z_t, y)
-            v_pred, v_target = flow.get_train_tuple(z_0, z_1, t)
+            v_pred, v_target = flow.get_train_tuple(z_0, z_1, t, model_kwargs=model_kwargs)
+            # print(v_pred.min(), v_pred.max())
+            # print(v_target.min(), v_target.max())
             con_loss = F.mse_loss(v_pred, v_target)
+            # print(con_loss)
 
             loss = fm_loss + con_loss
             accelerator.backward(loss)
@@ -229,6 +232,7 @@ def train(args):
                     end_time = time()
                     steps_per_sec = log_steps / (end_time - start_time)
                     logger.info('epoch {} iteration{}, Loss: {}, FMLoss: {}, CONLoss: {}, Train Steps/Sec: {:.2f}'.format(epoch,iteration, loss.item(), fm_loss.item(), con_loss.item(), steps_per_sec))
+                    # logger.info('epoch {} iteration{}, Loss: {}, FMLoss: {}, CONLoss: {}, Train Steps/Sec: {:.2f}'.format(epoch,iteration, loss.item(), fm_loss, con_loss.item(), steps_per_sec))
                     # Reset monitoring variables:
                     log_steps = 0
                     start_time = time()

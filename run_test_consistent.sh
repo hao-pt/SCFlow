@@ -17,7 +17,7 @@
 set -x
 set -e
 
-export MASTER_PORT=12002
+export MASTER_PORT=13001
 export WORLD_SIZE=1
 
 export SLURM_JOB_NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ' ')
@@ -38,28 +38,27 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 MODEL_TYPE=adm
 EPOCH_ID=450
 DATASET=celeba_256
-EXP=laflo_celeba_f8_lr2e-5_bs32x2
+EXP=celeba_f8_lr2e-5_150steps
 METHOD=euler
-STEPS=100
+STEPS=15
 USE_ORIGIN_ADM=True
 
 if [[ ${USE_ORIGIN_ADM} == True ]]; then
-    python test_flow_latent.py --exp ${EXP} \
+    python test_consistent_flow.py --exp ${EXP} \
         --dataset ${DATASET} --batch_size 50 --epoch_id ${EPOCH_ID} \
         --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
         --nf 192 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 3 \
         --use_origin_adm \
         --num_head_channels 64 \
         --master_port $MASTER_PORT --num_process_per_node 1 \
-        --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
-        --method ${METHOD} --num_steps 0 \
+        --method ${METHOD} --num_steps ${STEPS} \
+        --use_karras_samplers \
+        # --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
         # --measure_time \
-        # --use_karras_samplers \
-        # --method heun --step_size 50 \
         # --compute_nfe \
 
 else
-    python test_flow_latent.py --exp ${EXP} \
+    python test_consistent_flow.py --exp ${EXP} \
         --dataset ${DATASET} --batch_size 100 --epoch_id ${EPOCH_ID} \
         --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
         --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
