@@ -143,7 +143,6 @@ def train(args):
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epoch, eta_min=1e-5)
     # Ensure EMA is initialized with synced weights
     ema.ema_step(decay_rate=0, model=model)  
-    target_ema.ema_step(decay_rate=0, model=model)
     model.train()
     data_loader, model, optimizer, scheduler = accelerator.prepare(data_loader, model, optimizer, scheduler)
 
@@ -179,6 +178,7 @@ def train(args):
     else:
         global_step, epoch, init_epoch = 0, 0, 0
 
+    target_ema.ema_step(decay_rate=0, model=model)
 
     use_label = True if "imagenet" in args.dataset else False
     is_latent_data = True if "latent" in args.dataset else False
@@ -205,16 +205,15 @@ def train(args):
             # z_t = (1 - (1 - 1e-5) * t) * z_0 + t * z_1
             # u = z_1 - (1 - 1e-5) * z_0
             model_kwargs = {"y": y, "augment_labels": augment_labels}
-            z_t, t, u = flow.get_train_tuple_flow(z_0, z_1)
-            v = flow.model(t, z_t, y, augment_labels)
-            fm_loss = F.mse_loss(v, u)
+            # z_t, t, u = flow.get_train_tuple_flow(z_0, z_1)
+            # v = flow.model(t, z_t, y, augment_labels)
+            # fm_loss = F.mse_loss(v, u)
 
-            # v_target = ema(t.squeeze(), z_t, y)
-            v_pred, v_target = flow.get_train_tuple(z_0, z_1, t, model_kwargs=model_kwargs)
+            v_pred, v_target, gt_flow = flow.get_train_tuple(z_0, z_1, model_kwargs=model_kwargs)
             # print(v_pred.min(), v_pred.max())
             # print(v_target.min(), v_target.max())
+            fm_loss = F.mse_loss(v_pred, gt_flow)
             con_loss = F.mse_loss(v_pred, v_target)
-            # print(con_loss)
 
             loss = fm_loss + con_loss
             accelerator.backward(loss)
