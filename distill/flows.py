@@ -99,79 +99,98 @@ class BaseFlow():
 		return z1, 0, 0
 
 class RectifiedFlow(BaseFlow):
-	def get_train_tuple_flow(self, z0=None, z1=None, t = None, eps=1e-5):
-		if t is None:
-			t = torch.rand((z1.shape[0], 1), device=self.device)
-		t = t * (1 - eps) + eps
+    def __init__(self, discrete=False, **kwargs):
+        super().__init__(**kwargs)
+        self.discrete = discrete
 
-		if len(z1.shape) == 2:
-			z_t =  t * z1 + (1.-t) * z0
-		elif len(z1.shape) == 4:
-			t = t.view(-1, 1, 1, 1)
-			z_t =  t * z1 + (1.-t) * z0
-			t = t.view(-1)
-		else:
-			raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
-		target = z1 - z0
-		return z_t, t, target
-	
-	def get_train_tuple_ddpm(self, z0=None, z1=None, t = None):
-		a = 19.9
-		b = 0.1
-		if t is None:
-			t = torch.rand((z1.shape[0], 1), device=self.device)
-			eps = 1e-5
-			t = t * (1 - eps) + eps
-		alpha_t = alpha(t)
-		if len(z1.shape) == 2:
-			z_t =  torch.sqrt(1 - alpha_t ** 2) * z1 + alpha_t * z0
-		elif len(z1.shape) == 4:
-			raise NotImplementedError
-			t = t.view(-1, 1, 1, 1)
-			z_t =  t * z1 + (1.-t) * z0
-		else:
-			raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
-		target = d_1_minus_alpha_sq_dt(t) * z1 + dalpha_dt(t) * z0
-		return z_t, t, target
+    def get_train_tuple_flow(self, z0=None, z1=None, t = None, eps=1e-5):
+        if t is None:
+            if self.discrete:
+                t = torch.randint(1,self.TN+1,(z0.shape[0],)).to(z1.device).float()/self.TN
+            else:
+                t = torch.rand((z1.shape[0], 1), device=self.device)
+                t = t * (1 - eps) + eps
+
+        if len(z1.shape) == 2:
+            z_t =  t * z1 + (1.-t) * z0
+        elif len(z1.shape) == 4:
+            t = t.view(-1, 1, 1, 1)
+            z_t =  t * z1 + (1.-t) * z0
+            t = t.view(-1)
+        else:
+            raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
+        target = z1 - z0
+        return z_t, t, target
+
+    def get_train_tuple_ddpm(self, z0=None, z1=None, t = None):
+        a = 19.9
+        b = 0.1
+        if t is None:
+            t = torch.rand((z1.shape[0], 1), device=self.device)
+            eps = 1e-5
+            t = t * (1 - eps) + eps
+        alpha_t = alpha(t)
+        if len(z1.shape) == 2:
+            z_t =  torch.sqrt(1 - alpha_t ** 2) * z1 + alpha_t * z0
+        elif len(z1.shape) == 4:
+            raise NotImplementedError
+            t = t.view(-1, 1, 1, 1)
+            z_t =  t * z1 + (1.-t) * z0
+        else:
+            raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
+        target = d_1_minus_alpha_sq_dt(t) * z1 + dalpha_dt(t) * z0
+        return z_t, t, target
 
 
 class ConsistencyFlow(RectifiedFlow):
-	def __init__(self, device, model, ema_model, pretrained_model=None, num_steps=1000, TN=16, discrete=False):
-		self.ema_model = ema_model
-		self.pretrained_model = pretrained_model # copy.deepcopy(model.module)
-		self.discrete = discrete
-		self.model = model
-		self.N = num_steps
-		self.TN = TN
-		self.device = device
+    def __init__(self, device, model, ema_model, pretrained_model=None, num_steps=1000, TN=16, discrete=False):
+        self.ema_model = ema_model
+        self.pretrained_model = pretrained_model # copy.deepcopy(model.module)
+        self.discrete = discrete
+        self.model = model
+        self.N = num_steps
+        self.TN = TN
+        self.device = device
 
-	def get_train_tuple(self, z0=None, z1=None, t=None, eps=1e-5, model_kwargs={}):
-		if t is None:
-			if self.discrete:
-				t = torch.randint(1, self.TN+1, (z0.shape[0],)).to(z1.device).float() / self.TN
-			else:
-				t = torch.rand((z0.shape[0],)).to(z1.device).float()
-		if len(z1.shape) == 2:
-			pre_z_t = (eps + (1 - eps) * t) * z1 + (1. - t) * z0
-		elif len(z1.shape) == 4:
-			t = t.view(-1, 1, 1, 1)
-			pre_z_t = (eps + (1 - eps) * t) * z1 + (1. - t) * z0
-			t = t.view(-1)
-		else:
-			raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
-		
-		if self.pretrained_model is not None:
-			with torch.no_grad():
-				now_z_t = pre_z_t - (1/self.TN) * self.pretrained_model(t, pre_z_t, y=model_kwargs.get("y", None))
-				now_t = torch.clamp(t - (1/self.TN), 1/self.TN, 1)
-		else:
-			now_z_t = pre_z_t - (1/self.TN) * (z1 - z0)
-		now_t = torch.clamp(t - (1/self.TN), 1/self.TN, 1)
-		
-		pred_z_t = self.model(t, pre_z_t, **model_kwargs)
-		with torch.no_grad():
-			gt_z_t = self.ema_model(now_t, now_z_t, **model_kwargs)
-		return pred_z_t, gt_z_t
+    def get_train_tuple(self, z0=None, z1=None, t=None, eps=1e-5, model_kwargs={}):
+        if t is None:
+            if self.discrete:
+                t = torch.randint(1, self.TN+1, (z0.shape[0],)).to(z1.device).float() / self.TN
+                dt = 1/self.TN
+            else:
+                t = torch.rand((z0.shape[0],)).to(z1.device).float()
+                t = t * (1 - eps) + eps
+                dt = eps + 1/self.TN
+        if len(z1.shape) == 2:
+            # pre_z_t = (eps + (1 - eps) * t) * z1 + (1. - t) * z
+            pre_z_t = t * z1 + (1. - t) * z0
+        elif len(z1.shape) == 4:
+            t = t.view(-1, 1, 1, 1)
+            # pre_z_t = (eps + (1 - eps) * t) * z1 + (1. - t) * z
+            pre_z_t = t * z1 + (1. - t) * z0
+            t = t.view(-1)
+        else:
+            raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
+
+        if self.pretrained_model is not None:
+            with torch.no_grad():
+                now_z_t = pre_z_t - (1/self.TN) * self.pretrained_model(t, pre_z_t, y=model_kwargs.get("y", None))
+        else:
+            # now_z_t = pre_z_t - (1/self.TN) * (z1 - z0)
+            # with torch.no_grad():
+            #     now_z_t = pre_z_t - (1/self.TN) * self.ema_model(t, pre_z_t, y=model_kwargs.get("y", None))
+            now_t = torch.clamp(t/2., eps, 1) # torch.clamp(t - (1/self.TN), 1/self.TN, 1)
+            now_t = now_t.view(-1, 1, 1, 1)
+            now_z_t = now_t * z1 + (1. - now_t) * z0
+            now_t = now_t.view(-1)
+            mask = (t>=dt)
+        # now_t = torch.clamp(t - (1/self.TN), 1/self.TN, 1)
+        pred_z_t = self.model(t, pre_z_t, **model_kwargs)
+        gt_flow = z1 - z0
+        with torch.no_grad():
+            gt_z_t = self.ema_model(now_t, now_z_t, **model_kwargs).detach()
+            gt_z_t[~mask] = (z1-z0)[~mask]
+        return pred_z_t, gt_z_t, gt_flow
 
   
 class ProgDistFlow(RectifiedFlow):

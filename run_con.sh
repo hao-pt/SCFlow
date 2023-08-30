@@ -48,19 +48,21 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 #     --master_port $MASTER_PORT \
 #     --use_ema \
 
-#  --multi_gpu 
-accelerate launch --num_processes 1 --main_process_port 28500 train_consistent_flow_faster.py --exp celeba_f8_lr2e-5_150steps_augment0.15 \
+#   
+accelerate launch --multi_gpu --num_processes 2 --main_process_port 28500 train_consistent_flow_faster.py --exp celeba_f8_lr2e-5_50steps_ema0.95 \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
     --batch_size 48 --num_epoch 500 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
     --nf 192 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 3 \
     --use_origin_adm \
     --num_head_channels 64 \
-    --lr 2e-5 --scale_factor 0.18215 --no_lr_decay \
-    --num_timesteps 150 \
+    --lr 2e-5 --scale_factor 0.18215 \
+    --num_timesteps 50 \
     --target_ema_decay 0.95 \
     --save_content --save_content_every 10 \
-    --augment 0.15 \
+    # --no_lr_decay 
+    # --discrete_timesteps \
+    # --augment 0.15 \
 
 
 ############################################### ADM ~ FFHQ 256 ###############################################
