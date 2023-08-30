@@ -4,7 +4,7 @@
 #SBATCH --error=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.err # create a error file
 #SBATCH --partition=research # choose partition
 #SBATCH --gpus-per-node=1
-#SBATCH --cpus-per-task=32 # 80
+#SBATCH --cpus-per-gpu=16 # 80
 #SBATCH --mem-per-gpu=32GB
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -17,7 +17,7 @@
 set -x
 set -e
 
-export MASTER_PORT=12002
+export MASTER_PORT=13001
 export WORLD_SIZE=1
 
 export SLURM_JOB_NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ' ')
@@ -43,8 +43,7 @@ METHOD=euler
 STEPS=100
 USE_ORIGIN_ADM=True
 
-if [[ ${USE_ORIGIN_ADM} == True ]]; then
-    python test_flow_latent.py --exp ${EXP} \
+python test_consistent_flow.py --exp ${EXP} \
         --dataset ${DATASET} --batch_size 50 --epoch_id ${EPOCH_ID} \
         --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
         --nf 192 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 3 \
@@ -53,21 +52,6 @@ if [[ ${USE_ORIGIN_ADM} == True ]]; then
         --master_port $MASTER_PORT --num_process_per_node 1 \
         --use_karras_samplers \
         --method ${METHOD} --num_steps ${STEPS} \
-        # --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
-        # --measure_time \
-        # --compute_nfe \
-
-else
-    python test_flow_latent.py --exp ${EXP} \
-        --dataset ${DATASET} --batch_size 100 --epoch_id ${EPOCH_ID} \
-        --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-        --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
-        --master_port $MASTER_PORT --num_process_per_node 1 \
         --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
-        --method dopri5 --num_steps 0 \
         # --measure_time \
-        # --use_karras_samplers \
-        # --method heun --step_size 50 \
         # --compute_nfe \
-
-fi
