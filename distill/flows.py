@@ -176,15 +176,17 @@ class ConsistencyFlow(RectifiedFlow):
             with torch.no_grad():
                 now_z_t = pre_z_t - (1/self.TN) * self.pretrained_model(t, pre_z_t, y=model_kwargs.get("y", None))
         else:
-            # now_z_t = pre_z_t - (1/self.TN) * (z1 - z0)
+            now_z_t = pre_z_t - (1/self.TN) * (z1 - z0)
             # with torch.no_grad():
             #     now_z_t = pre_z_t - (1/self.TN) * self.ema_model(t, pre_z_t, y=model_kwargs.get("y", None))
-            now_t = torch.clamp(t/2., eps, 1) # torch.clamp(t - (1/self.TN), 1/self.TN, 1)
-            now_t = now_t.view(-1, 1, 1, 1)
-            now_z_t = now_t * z1 + (1. - now_t) * z0
-            now_t = now_t.view(-1)
-            mask = (t>=dt)
-        # now_t = torch.clamp(t - (1/self.TN), 1/self.TN, 1)
+            now_t = torch.clamp(t - (1/self.TN), eps, 1)
+
+            # now_t = torch.clamp(t/2., eps, 1)
+            # now_t = now_t.view(-1, 1, 1, 1)
+            # now_z_t = now_t * z1 + (1. - now_t) * z0
+            # now_t = now_t.view(-1)
+        mask = (t>=dt)
+        # now_t = torch.clamp(t - (1/self.TN), eps, 1)
         pred_z_t = self.model(t, pre_z_t, **model_kwargs)
         gt_flow = z1 - z0
         with torch.no_grad():
