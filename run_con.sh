@@ -1,5 +1,5 @@
 #!/bin/sh
-#SBATCH --job-name=run # create a short name for your job
+#SBATCH --job-name=r502 # create a short name for your job
 #SBATCH --output=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.out # create a output file
 #SBATCH --error=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.err # create a error file
 #SBATCH --partition=research # choose partition
@@ -51,7 +51,7 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 #   
 accelerate launch --multi_gpu --num_processes 2 --main_process_port 28500 train_consistent_flow_faster.py --exp celeba_f8_lr2e-5_50steps_ema0.95_t4 \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-    --batch_size 48 --num_epoch 500 \
+    --batch_size 96 --num_epoch 500 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
     --nf 192 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 3 \
     --use_origin_adm \
