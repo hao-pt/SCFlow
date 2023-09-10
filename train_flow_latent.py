@@ -80,6 +80,7 @@ def train(rank, gpu, args):
         )
         # Creating an object
         logger = logging.getLogger(__name__)
+        logger.setLevel(logging.INFO)
         logger.info(f"Exp path: {exp_path}")
 
     batch_size = args.batch_size
