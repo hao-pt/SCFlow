@@ -10,12 +10,11 @@ import shutil
 import argparse
 from functools import partial
 from omegaconf import OmegaConf
+from time import time
+import logging
 
 import numpy as np
 import torch
-# faster training
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
 from torchdiffeq import odeint_adjoint as odeint
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,19 +28,13 @@ from models import create_network
 from EMA import EMA
 
 
+
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
 
 
 def get_weight(model):
-    param_size = 0
-    for param in model.parameters():
-        param_size += param.nelement() * param.element_size()
-    buffer_size = 0
-    for buffer in model.buffers():
-        buffer_size += buffer.nelement() * buffer.element_size()
-
-    size_all_mb = (param_size + buffer_size) / 1024**2
+    size_all_mb = sum(p.numel() for p in model.parameters()) / 1024**2
     return size_all_mb
 
 
@@ -59,15 +52,37 @@ def sample_from_model(model, x_0):
 #%%
 def train(rank, gpu, args):
     from diffusers.models import AutoencoderKL
+    if args.faster_training:
+        # faster training
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     torch.manual_seed(args.seed + rank)
     torch.cuda.manual_seed(args.seed + rank)
     torch.cuda.manual_seed_all(args.seed + rank)
 
     device = torch.device('cuda:{}'.format(gpu))
-    dtype = torch.bfloat16 if args.use_bf16 else torch.float32
+    dtype = torch.float16 if args.use_fp16 else torch.float32
+
+    exp = args.exp
+    parent_dir = "./saved_info/latent_flow/{}".format(args.dataset)
+    exp_path = os.path.join(parent_dir, exp)
+    if rank == 0:
+        if not os.path.exists(exp_path):
+            os.makedirs(exp_path)
+            config_dict = vars(args)
+            OmegaConf.save(config_dict, os.path.join(exp_path, "config.yaml"))
+
+        logging.basicConfig(
+            format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+            datefmt="%m/%d/%Y %H:%M:%S",
+            level=logging.INFO,
+            handlers=[logging.StreamHandler(), logging.FileHandler(f"{exp_path}/log.txt")]
+        )
+        # Creating an object
+        logger = logging.getLogger(__name__)
+        logger.info(f"Exp path: {exp_path}")
 
     batch_size = args.batch_size
-
     dataset = get_dataset(args)
     train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
                                                                     num_replicas=args.world_size,
@@ -90,8 +105,8 @@ def train(rank, gpu, args):
     for param in first_stage_model.parameters():
         param.requires_grad = False
 
-    print('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
-    print('FM size: {:.3f}MB'.format(get_weight(model)))
+    logger.info('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
+    logger.info('FM size: {:.3f}MB'.format(get_weight(model)))
 
     broadcast_params(model.parameters())
 
@@ -105,16 +120,6 @@ def train(rank, gpu, args):
     #ddp
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=False)
 
-    exp = args.exp
-    parent_dir = "./saved_info/latent_flow/{}".format(args.dataset)
-
-    exp_path = os.path.join(parent_dir, exp)
-    if rank == 0:
-        if not os.path.exists(exp_path):
-            os.makedirs(exp_path)
-            config_dict = vars(args)
-            OmegaConf.save(config_dict, os.path.join(exp_path, "config.yaml"))
-    print("Exp path:", exp_path)
 
     if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
@@ -127,7 +132,7 @@ def train(rank, gpu, args):
         scheduler.load_state_dict(checkpoint['scheduler'])
         global_step = checkpoint["global_step"]
 
-        print("=> resume checkpoint (epoch {})"
+        logger.info("=> resume checkpoint (epoch {})"
                   .format(checkpoint['epoch']))
         del checkpoint
 
@@ -139,7 +144,7 @@ def train(rank, gpu, args):
         model.load_state_dict(checkpoint)
         global_step = 0
 
-        print("=> loaded checkpoint (epoch {})"
+        logger.info("=> loaded checkpoint (epoch {})"
                   .format(epoch))
         del checkpoint
     else:
@@ -147,6 +152,7 @@ def train(rank, gpu, args):
 
     use_label = True if "imagenet" in args.dataset else False
     is_latent_data = True if "latent" in args.dataset else False
+    start_time = time()
     for epoch in range(init_epoch, args.num_epoch+1):
         train_sampler.set_epoch(epoch)
 
@@ -163,19 +169,19 @@ def train(rank, gpu, args):
             t = t.view(-1, 1, 1, 1)
             z_1 = torch.randn_like(z_0)
             # corrected notation: 1 is real noise, 0 is real data
-            v_t = (1 - t) * z_0 + (1e-5 + (1 - 1e-5) * t) * z_1
+            z_t = (1 - t) * z_0 + (1e-5 + (1 - 1e-5) * t) * z_1
             u = (1 - 1e-5) * z_1 - z_0
-            # alternative notation (similar to flow matching): 1 is data, 0 is real noise
-            # v_t = (1 - (1 - 1e-5) * t) * z_0 + t * z_1
-            # u = z_1 - (1 - 1e-5) * z_0
-            v = model(t.squeeze(), v_t, y)
+            v = model(t.squeeze(), z_t, y)
             loss = F.mse_loss(v, u)
             loss.backward()
             optimizer.step()
             global_step += 1
             if iteration % 100 == 0:
                 if rank == 0:
-                    print('epoch {} iteration{}, Loss: {}'.format(epoch,iteration, loss.item()))
+                    end_time = time()
+                    steps_per_sec = 100 / (end_time - start_time)
+                    logger.info('epoch {} iteration{}, Loss: {}, Train Steps/Sec: {:.2f}'.format(epoch, iteration, loss.item(), steps_per_sec))
+                    start_time = time()
 
         if not args.no_lr_decay:
             scheduler.step()
@@ -193,11 +199,11 @@ def train(rank, gpu, args):
                     fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
                 # torchvision.utils.save_image(fake_sample, os.path.join(exp_path, 'sample_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
                 torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
-                print("Finish sampling")
+                logger.info("Finish sampling")
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
-                    print('Saving content.')
+                    logger.info('Saving content.')
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
                                'scheduler': scheduler.state_dict()}
@@ -211,7 +217,6 @@ def train(rank, gpu, args):
                 torch.save(model.state_dict(), os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
                 if args.use_ema:
                     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-
 
 
 def init_processes(rank, size, fn, args):
@@ -294,7 +299,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='cifar10', help='name of dataset')
     parser.add_argument('--datadir', default='./data')
     parser.add_argument('--num_timesteps', type=int, default=200)
-    parser.add_argument('--use_bf16', action='store_true', default=False)
+    parser.add_argument('--use_fp16', action='store_true', default=False)
     parser.add_argument('--use_grad_checkpointing', action='store_true', default=False,
         help="Enable gradient checkpointing for mem saving")
 
@@ -312,6 +317,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_ema', action='store_true', default=False,
                             help='use EMA or not')
     parser.add_argument('--ema_decay', type=float, default=0.9999, help='decay rate for EMA')
+    parser.add_argument('--faster_training',action='store_true', default=False)
 
 
     parser.add_argument('--save_content', action='store_true', default=False)
