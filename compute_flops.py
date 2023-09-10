@@ -2,6 +2,7 @@ import argparse
 import torch
 from fvcore.nn import FlopCountAnalysis, flop_count_table
 # from torchtoolbox.tools import summary
+from thop.profile import profile
 
 from models import create_network, get_flow_model
 
@@ -63,10 +64,12 @@ if __name__ == '__main__':
     parser.add_argument('--cfg_scale', type=float, default=1.,
                             help='Scale for classifier-free guidance')
 
+    # Original ADM
+    parser.add_argument('--layout', action='store_true')
+    parser.add_argument('--use_origin_adm', action='store_true')
     parser.add_argument("--use_scale_shift_norm", type=bool, default=True)
     parser.add_argument("--resblock_updown", type=bool, default=False)
     parser.add_argument("--use_new_attention_order", type=bool, default=False)
-
     parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="stabilityai/sd-vae-ft-mse")
     parser.add_argument('--output_log', type=str, default="")
     
@@ -93,8 +96,7 @@ if __name__ == '__main__':
     torch.manual_seed(42)
     device = 'cuda:0'
 
-    # model = create_network(args).to(device)
-    model = get_flow_model(args).to(device)
+    model = create_network(args).to(device)
     model.eval()
 
     pytorch_total_params = sum(p.numel() for p in model.parameters())
@@ -115,7 +117,15 @@ if __name__ == '__main__':
     x = torch.randn(args.batch_size, args.num_in_channels, args.image_size//args.f, args.image_size//args.f).to(device)
     t = torch.ones(args.batch_size).to(device)
 
-    flops = FlopCountAnalysis(model, (t, x))
-    print(flop_count_table(flops))
-    print(flops.total())
+    # flops = FlopCountAnalysis(model, (t, x))
+    # print(flop_count_table(flops))
+    # print(flops.total())
+    
+    print("%s | %s" % ("Params(M)", "FLOPs(G)"))
+    print("---|---")
+    total_ops, total_params = profile(model, (t,x), verbose=False)
+    print(
+        "%.2f | %.2f" % (total_params / (1000 ** 2), total_ops / (1000 ** 3))
+    )
+ 
 
