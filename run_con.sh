@@ -1,10 +1,10 @@
 #!/bin/sh
-#SBATCH --job-name=r502 # create a short name for your job
+#SBATCH --job-name=r10 # create a short name for your job
 #SBATCH --output=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.out # create a output file
 #SBATCH --error=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.err # create a error file
 #SBATCH --partition=research # choose partition
 #SBATCH --gpus-per-node=1
-#SBATCH --cpus-per-task=32 # 80
+#SBATCH --cpus-per-gpu=8 # 80
 #SBATCH --mem-per-gpu=32GB
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -36,19 +36,8 @@ export PYTHONFAULTHANDLER=1
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
 ############################################### ADM ~ CelebA 256 ###############################################
-# CUDA_VISIBLE_DEVICES=0,2 python train_flow_latent.py --exp laflo_celeba_f8_lr2e-5_bs32x2 \
-#     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-#     --batch_size 32 --num_epoch 500 \
-#     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-#     --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
-#     --use_origin_adm \
-#     --num_head_channels 32 \
-#     --lr 2e-5 --scale_factor 0.18215 \
-#     --save_content --save_content_every 10 \
-#     --master_port $MASTER_PORT \
-#     --use_ema \
-
-accelerate launch --multi_gpu --num_processes 2 --main_process_port 28500 train_consistent_flow_faster.py --exp celeba_f8_lr2e-5_50steps_ema0.95 \
+# --multi_gpu 
+accelerate launch --num_processes 1 --main_process_port 28500 train_consistent_flow_faster.py --exp celeba_f8_lr2e-5_10steps_ema0.95 \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
     --batch_size 96 --num_epoch 500 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
@@ -56,7 +45,7 @@ accelerate launch --multi_gpu --num_processes 2 --main_process_port 28500 train_
     --use_origin_adm \
     --num_head_channels 64 \
     --lr 2e-5 --scale_factor 0.18215 \
-    --num_timesteps 50 \
+    --num_timesteps 10 \
     --target_ema_decay 0.95 \
     --save_content --save_content_every 10 \
     # --no_lr_decay 
