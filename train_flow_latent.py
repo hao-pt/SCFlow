@@ -72,16 +72,18 @@ def train(rank, gpu, args):
             config_dict = vars(args)
             OmegaConf.save(config_dict, os.path.join(exp_path, "config.yaml"))
 
-        logging.basicConfig(
-            format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-            datefmt="%m/%d/%Y %H:%M:%S",
-            level=logging.INFO,
-            handlers=[logging.StreamHandler(), logging.FileHandler(f"{exp_path}/log.txt")]
-        )
-        # Creating an object
-        logger = logging.getLogger(__name__)
-        logger.setLevel(logging.INFO)
-        logger.info(f"Exp path: {exp_path}")
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        level=logging.INFO,
+        handlers=[logging.StreamHandler(), logging.FileHandler(f"{exp_path}/log.txt")]
+    )
+    # Creating an object
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    logger.info(f"Exp path: {exp_path}")
 
     batch_size = args.batch_size
     dataset = get_dataset(args)
