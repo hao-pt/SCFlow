@@ -27,6 +27,7 @@ from datasets_prep import get_dataset
 from models import create_network
 from EMA import EMA
 
+from models.augment import AugmentPipe
 
 
 def copy_source(file, output_dir):
@@ -98,6 +99,10 @@ def train(rank, gpu, args):
                                                sampler=train_sampler,
                                                drop_last = True)
 
+    augment_pipe = AugmentPipe(p=args.augment, xflip=1e8, yflip=1, scale=1, rotate_frac=1, aniso=1, translate_frac=1) if args.augment else None
+    if args.augment:
+        args.augment_dim = 9
+
     model = create_network(args).to(device, dtype=dtype)
     if args.use_grad_checkpointing and "DiT" in args.model_type:
         model.set_gradient_checkpointing()
@@ -162,19 +167,27 @@ def train(rank, gpu, args):
         for iteration, (x, y) in enumerate(data_loader):
             x_0 = x.to(device, dtype=dtype, non_blocking=True)
             y = None if not use_label else y.to(device, non_blocking=True)
+            x_0, augment_labels = augment_pipe(x_0) if augment_pipe is not None else (x_0, None)
             model.zero_grad()
             if is_latent_data:
                 z_0 = x_0 * args.scale_factor
             else:
                 z_0 = first_stage_model.encode(x_0).latent_dist.sample().mul_(args.scale_factor)
             #sample t
-            t = torch.rand((z_0.size(0),), dtype=dtype, device=device)
+            if args.discrete:
+                t = torch.randint(1,1001,(z_0.shape[0],)).to(z_0.device).float()/1000
+            else:
+                t = torch.rand((z_0.size(0),), dtype=dtype, device=device)
+                t = t * (1 - 1e-5) + 1e-5
+            
             t = t.view(-1, 1, 1, 1)
             z_1 = torch.randn_like(z_0)
             # corrected notation: 1 is real noise, 0 is real data
-            z_t = (1 - t) * z_0 + (1e-5 + (1 - 1e-5) * t) * z_1
-            u = (1 - 1e-5) * z_1 - z_0
-            v = model(t.squeeze(), z_t, y)
+            # z_t = (1 - t) * z_0 + (1e-5 + (1 - 1e-5) * t) * z_1
+            # u = (1 - 1e-5) * z_1 - z_0
+            z_t = (1 - t) * z_0 + t * z_1
+            u = z_1 - z_0
+            v = model(t.squeeze(), z_t, y, augment_labels)
             loss = F.mse_loss(v, u)
             loss.backward()
             optimizer.step()
@@ -272,6 +285,7 @@ if __name__ == '__main__':
                             help='drop-out rate')
     parser.add_argument('--label_dim', type=int, default=0,
                             help='label dimension, 0 if unconditional')
+    parser.add_argument('--augment', type=float, default=0.)
     parser.add_argument('--augment_dim', type=int, default=0,
                             help='dimension of augmented label, 0 if not used')
     parser.add_argument('--num_classes', type=int, default=None,
@@ -321,6 +335,7 @@ if __name__ == '__main__':
                             help='use EMA or not')
     parser.add_argument('--ema_decay', type=float, default=0.9999, help='decay rate for EMA')
     parser.add_argument('--faster_training',action='store_true', default=False)
+    parser.add_argument('--discrete', action='store_true', default=False)
 
 
     parser.add_argument('--save_content', action='store_true', default=False)

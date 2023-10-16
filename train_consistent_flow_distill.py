@@ -277,7 +277,6 @@ def train(rank, gpu, args):
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
                                'scheduler': scheduler.state_dict(),
-                               'ema_model_dict': ema.state_dict(),
                                }
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 

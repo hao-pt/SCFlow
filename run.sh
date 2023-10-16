@@ -1,10 +1,10 @@
 #!/bin/sh
-#SBATCH --job-name=run # create a short name for your job
+#SBATCH --job-name=flow # create a short name for your job
 #SBATCH --output=/lustre/scratch/client/vinai/users/ngocbh8/quan/cnf_flow/slurms/slurm_%A.out # create a output file
 #SBATCH --error=/lustre/scratch/client/vinai/users/ngocbh8/quan/cnf_flow/slurms/slurm_%A.err # create a error file
-#SBATCH --partition=applied # choose partition
-#SBATCH --gpus-per-node=8
-#SBATCH --cpus-per-task=32 # 80
+#SBATCH --partition=research # choose partition
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=16 # 80
 #SBATCH --mem-per-gpu=32GB
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -36,7 +36,7 @@ export PYTHONFAULTHANDLER=1
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
 ############################################### ADM ~ CelebA 256 ###############################################
-CUDA_VISIBLE_DEVICES=0 python train_flow_latent.py --exp celeba_f8_lr5e-5_adm \
+CUDA_VISIBLE_DEVICES=0 python train_flow_latent.py --exp celeba_f8_lr5e-5_adm_augment0.15 \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
     --batch_size 64 --num_epoch 500 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
@@ -47,6 +47,7 @@ CUDA_VISIBLE_DEVICES=0 python train_flow_latent.py --exp celeba_f8_lr5e-5_adm \
     --master_port $MASTER_PORT \
     --use_ema \
     --num_head_channels 64 \
+    --augment 0.15 \
 
 # # --multi_gpu 
 # accelerate launch --num_processes 1 --mixed_precision fp16 --main_process_port 28500 train_flow_latent_faster.py --exp celeba_f8_lr5e-5_t1 \
