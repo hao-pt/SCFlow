@@ -143,13 +143,14 @@ class RectifiedFlow(BaseFlow):
 
 
 class ConsistencyFlow(RectifiedFlow):
-    def __init__(self, device, model, ema_model, pretrained_model=None, num_steps=1000, TN=16, discrete=False):
+    def __init__(self, device, model, ema_model, pretrained_model=None, num_steps=1000, TN=16, skip=1, discrete=False):
         self.ema_model = ema_model
         self.pretrained_model = pretrained_model # copy.deepcopy(model.module)
         self.discrete = discrete
         self.model = model
         self.N = num_steps
         self.TN = TN
+        self.skip = 1
         self.device = device
 
     def get_train_tuple(self, z0=None, z1=None, t=None, eps=1e-5, model_kwargs={}):
@@ -161,14 +162,17 @@ class ConsistencyFlow(RectifiedFlow):
                 t = torch.rand((z0.shape[0],)).to(z1.device).float()
                 t = t * (1 - eps) + eps
                 dt = eps + 1/self.TN
+
+        t_onl = t if self.skip == 0 else torch.clamp(t + (self.skip / self.TN), 1/self.TN, 1.)
+            
         if len(z1.shape) == 2:
             # pre_z_t = (eps + (1 - eps) * t) * z1 + (1. - t) * z
-            pre_z_t = t * z1 + (1. - t) * z0
+            pre_z_t = t_onl * z1 + (1. - t_onl) * z0
         elif len(z1.shape) == 4:
-            t = t.view(-1, 1, 1, 1)
+            t_onl = t_onl.view(-1, 1, 1, 1)
             # pre_z_t = (eps + (1 - eps) * t) * z1 + (1. - t) * z
-            pre_z_t = t * z1 + (1. - t) * z0
-            t = t.view(-1)
+            pre_z_t = t_onl * z1 + (1. - t_onl) * z0
+            t_onl = t_onl.view(-1)
         else:
             raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
 
@@ -187,7 +191,7 @@ class ConsistencyFlow(RectifiedFlow):
             # now_z_t = now_t * z1 + (1. - now_t) * z0
             # now_t = now_t.view(-1)
         mask = (t>=dt)
-        pred_z_t = self.model(t, pre_z_t, **model_kwargs)
+        pred_z_t = self.model(t_onl, pre_z_t, **model_kwargs)
         gt_flow = z1 - z0
         with torch.no_grad():
             gt_z_t = self.ema_model(now_t, now_z_t, **model_kwargs).detach()
