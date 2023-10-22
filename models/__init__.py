@@ -1,6 +1,7 @@
 from .EDM import get_edm_network
 from .DiT import DiT_models
 from .guided_diffusion.unet import UNetModel# , UNetModelAttn
+from .discriminator import Discriminator
 
 def create_network(config):
     if config.use_origin_adm:
@@ -19,7 +20,7 @@ def create_discriminator(config):
     kwargs = dict(c_dim=0, img_resolution=config.image_size//config.f, 
         img_channels=config.num_in_channels, channel_base=config.d_base_channels,
         temb_dim=config.d_temb_channels)
-    model = discriminator.Discriminator(**kwargs)
+    model = Discriminator(**kwargs)
     return model
 
 

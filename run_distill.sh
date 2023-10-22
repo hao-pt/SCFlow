@@ -37,9 +37,9 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 
 ############################################### ADM ~ CelebA 256 ###############################################
 # --multi_gpu 
-python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip10 \
+python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-    --batch_size 48 --num_epoch 500 \
+    --batch_size 96 --num_epoch 500 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
     --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
     --use_origin_adm \
@@ -49,11 +49,12 @@ python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0
     --target_ema_decay 0.0 \
     --save_content --save_content_every 10 \
     --discrete_timesteps \
-    --master_port $MASTER_PORT --num_process_per_node 2 \
-    --model_ckpt saved_info/latent_flow/celeba_256/laflo_celeba_f8_lr2e-5_bs32x2/model_500.pth \
+    --master_port $MASTER_PORT --num_process_per_node 1 \
+    --model_ckpt saved_info/latent_flow/celeba_256/celeba_f8_adm_lr2e-5_bs32x2/model_500.pth \
     --use_ema \
     --skip_step 20 \
     --fm_loss \
+    --lrD 1e-5 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
     # --no_lr_decay 
     # --augment 0.15 \
 

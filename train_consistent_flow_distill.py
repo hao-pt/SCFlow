@@ -315,6 +315,7 @@ def train(rank, gpu, args):
 
         if not args.no_lr_decay:
             scheduler.step()
+            schedulerD.step()
 
         if rank == 0:
             if epoch % args.plot_every == 0:
@@ -323,7 +324,7 @@ def train(rank, gpu, args):
                     if y is not None:
                         y = y[:4]
                     sample_model = partial(model, y=y)
-                    fake_sample = flow.sample_ode_generative(rand, 10)[0][-1]
+                    fake_sample = flow.sample_ode_generative(rand, args.num_sample_timesteps)[0][-1]
                     fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
                 # torchvision.utils.save_image(fake_sample, os.path.join(exp_path, 'sample_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
                 torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
@@ -428,6 +429,7 @@ if __name__ == '__main__':
     parser.add_argument('--discrete_timesteps', action='store_true', default=False)
     parser.add_argument('--skip_step', type=int, default=0)
     parser.add_argument('--fm_loss', action='store_true', default=False)
+    parser.add_argument('--num_sample_timesteps', type=int, default=10)
 
     # discriminator
     parser.add_argument('--lrD', type=float, default=1e-4, help='learning rate d')

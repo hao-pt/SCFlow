@@ -75,7 +75,8 @@ class DiscriminatorBlock(torch.nn.Module):
         # self.register_buffer('resample_filter', f)
 
         if temb_dim is not None:
-            self.time_dense = Linear(temb_dim, tmp_channels, **init)
+            # self.time_dense = Linear(temb_dim, tmp_channels, **init)
+            self.time_dense = FullyConnectedLayer(temb_dim, tmp_channels)
 
         self.num_layers = 0
         def trainable_gen():
@@ -277,7 +278,6 @@ class Discriminator(torch.nn.Module):
                 embedding_dim=temb_dim,
                 hidden_dim=temb_dim,
                 output_dim=temb_dim,
-                act=activation,
             )
 
         if cmap_dim is None:

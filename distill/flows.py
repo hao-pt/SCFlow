@@ -172,7 +172,8 @@ class ConsistencyFlow(RectifiedFlow):
         target = z1 - z0
         v = self.model(t, z_t, **model_kwargs)
         if return_pred_z0:
-          pred_z0 = z_t - t * v
+          shape = [t.size(0)] + [1] * (len(v.shape) - 1)
+          pred_z0 = z_t - t.reshape(*shape) * v
           return z_t, t, target, pred_z0
         return z_t, t, target
 
@@ -220,7 +221,8 @@ class ConsistencyFlow(RectifiedFlow):
             gt_z_t = self.ema_model(now_t, now_z_t, **model_kwargs).detach()
             gt_z_t[~mask] = (z1-z0)[~mask]
         if return_pred_z0:
-          pred_z0 = pre_z_t - t * pred_z_t
+          shape = [t.size(0)] + [1] * (len(pred_z_t.shape) - 1)
+          pred_z0 = pre_z_t - t.reshape(*shape) * pred_z_t
           return pred_z_t, gt_z_t, gt_flow, pred_z0
         return pred_z_t, gt_z_t, gt_flow
 
