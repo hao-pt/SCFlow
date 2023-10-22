@@ -273,7 +273,7 @@ class Discriminator(torch.nn.Module):
         fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
         
         self.map_time = None
-        if temb_dim:
+        if temb_dim is not None:
             self.map_time = TimestepEmbedding(
                 embedding_dim=temb_dim,
                 hidden_dim=temb_dim,
@@ -396,7 +396,7 @@ class Conv2dLayer(torch.nn.Module):
         w = self.weight * self.weight_gain
         b = self.bias.to(x.dtype) if self.bias is not None else None
         flip_weight = (self.up == 1) # slightly faster
-        x = conv2d_resample.conv2d_resample(x=x, w=w.to(x.dtype), f=self.resample_filter, up=self.up, down=self.down, padding=self.padding, flip_weight=flip_weight)
+        x = conv2d_resample.conv2d_resample(x=x, w=w.to(x.dtype), f=self.resample_filter.clone(), up=self.up, down=self.down, padding=self.padding, flip_weight=flip_weight)
 
         act_gain = self.act_gain * gain
         act_clamp = self.conv_clamp * gain if self.conv_clamp is not None else None
