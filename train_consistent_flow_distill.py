@@ -225,7 +225,8 @@ def train(rank, gpu, args):
     else:
         global_step, epoch, init_epoch = 0, 0, 0
     
-    flow = ConsistencyFlow(device, model=model, ema_model=target_ema, pretrained_model=teacher, TN=args.num_timesteps, discrete=args.discrete_timesteps)
+    flow = ConsistencyFlow(device, model=model, ema_model=target_ema, pretrained_model=teacher, 
+        TN=args.num_timesteps, discrete=args.discrete_timesteps, skip=args.skip_step)
     use_label = True if "imagenet" in args.dataset else False
     is_latent_data = True if "latent" in args.dataset else False
     start_time = time()
@@ -251,7 +252,7 @@ def train(rank, gpu, args):
             # # v_t = (1 - (1 - 1e-5) * t) * z_0 + t * z_1
             # # u = z_1 - (1 - 1e-5) * z_0
             # v = model(t.squeeze(), v_t, y)
-            # fm_loss = F.mse_loss(v, u) 
+            # fm_loss = F.mse_loss(v, u)
 
             z_t, t, gt_flow, pred_z0 = flow.get_train_tuple_flow(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
             for p in modelD.parameters():
@@ -322,7 +323,7 @@ def train(rank, gpu, args):
                     if y is not None:
                         y = y[:4]
                     sample_model = partial(model, y=y)
-                    fake_sample = flow.sample_ode_generative(rand)[0][-1]
+                    fake_sample = flow.sample_ode_generative(rand, 10)[0][-1]
                     fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
                 # torchvision.utils.save_image(fake_sample, os.path.join(exp_path, 'sample_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
                 torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
@@ -425,6 +426,7 @@ if __name__ == '__main__':
     # distill
     parser.add_argument('--num_timesteps', type=int, default=200)
     parser.add_argument('--discrete_timesteps', action='store_true', default=False)
+    parser.add_argument('--skip_step', type=int, default=0)
     parser.add_argument('--fm_loss', action='store_true', default=False)
 
     # discriminator
