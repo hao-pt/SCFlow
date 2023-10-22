@@ -151,8 +151,31 @@ class ConsistencyFlow(RectifiedFlow):
         self.N = num_steps
         self.TN = TN
         self.device = device
+    
+    def get_train_tuple_flow(self, z0=None, z1=None, t = None, eps=1e-5, model_kwargs={}, return_pred_z0=False):
+        if t is None:
+            if self.discrete:
+                t = torch.randint(1,self.TN+1,(z0.shape[0],)).to(z1.device).float()/self.TN
+            else:
+                t = torch.rand((z1.shape[0], 1), device=self.device)
+                t = t * (1 - eps) + eps
 
-    def get_train_tuple(self, z0=None, z1=None, t=None, eps=1e-5, model_kwargs={}):
+        if len(z1.shape) == 2:
+            z_t =  t * z1 + (1.-t) * z0
+        elif len(z1.shape) == 4:
+            t = t.view(-1, 1, 1, 1)
+            z_t =  t * z1 + (1.-t) * z0
+            t = t.view(-1)
+        else:
+            raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
+        target = z1 - z0
+        v = self.model(t, z_t, **model_kwargs)
+        if return_pred_z0:
+          pred_z0 = z_t - t * v
+          return z_t, t, target, pred_z0
+        return z_t, t, target
+
+    def get_train_tuple(self, z0=None, z1=None, t=None, eps=1e-5, model_kwargs={}, return_pred_z0=False):
         if t is None:
             if self.discrete:
                 t = torch.randint(1, self.TN+1, (z0.shape[0],)).to(z1.device).float() / self.TN
@@ -192,6 +215,9 @@ class ConsistencyFlow(RectifiedFlow):
         with torch.no_grad():
             gt_z_t = self.ema_model(now_t, now_z_t, **model_kwargs).detach()
             gt_z_t[~mask] = (z1-z0)[~mask]
+        if return_pred_z0:
+          pred_z0 = pre_z_t - t * pred_z_t
+          return pred_z_t, gt_z_t, gt_flow, pred_z0
         return pred_z_t, gt_z_t, gt_flow
 
   

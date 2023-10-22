@@ -25,11 +25,23 @@ import torch.distributed as dist
 from torch.multiprocessing import Process
 
 from datasets_prep import get_dataset
-from models import create_network
+from models import create_network, create_discriminator
 from EMA import EMA, EMAMODEL
 
 from sampler.karras_sample import karras_sample
 from distill.flows import ConsistencyFlow
+
+
+def grad_penalty_call(args, D_real, x_t):
+    grad_real = torch.autograd.grad(
+        outputs=D_real.sum(), inputs=x_t, create_graph=True
+    )[0]
+    grad_penalty = (
+        grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2
+    ).mean()
+
+    grad_penalty = args.r1_gamma / 2 * grad_penalty
+    return grad_penalty
 
 
 def copy_source(file, output_dir):
@@ -166,18 +178,25 @@ def train(rank, gpu, args):
     logger.info('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
     logger.info('FM size: {:.3f}MB'.format(get_weight(model)))
 
+    modelD = create_discriminator(args).to(device, dtype=dtype)
+
     broadcast_params(model.parameters())
+    broadcast_params(modelD.parameters())
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.0)
+    optimizerD = optim.AdamW(modelD.parameters(), lr=args.lrD, weight_decay=0.0)
 
     if args.use_ema:
         optimizer = EMA(optimizer, ema_decay=args.ema_decay)
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epoch, eta_min=1e-5)
+    schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerD, args.num_epoch, eta_min=1e-5)
 
     #ddp
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=False)
     model.train()  # important! This enables embedding dropout for classifier-free guidance
+    modelD = nn.parallel.DistributedDataParallel(modelD, device_ids=[gpu], find_unused_parameters=False)
+    modelD.train()
 
     if args.model_ckpt:
         ckpt = torch.load(args.model_ckpt, map_location=device)
@@ -194,6 +213,10 @@ def train(rank, gpu, args):
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
         global_step = checkpoint["global_step"]
+        # load D
+        netD.load_state_dict(checkpoint['modelD_dict'])
+        optimizerD.load_state_dict(checkpoint['optimizerD'])
+        schedulerD.load_state_dict(checkpoint['schedulerD'])
 
         logger.info("=> resume checkpoint (epoch {})"
                   .format(checkpoint['epoch']))
@@ -212,12 +235,12 @@ def train(rank, gpu, args):
         for iteration, (x, y) in enumerate(data_loader):
             x_0 = x.to(device, dtype=dtype, non_blocking=True)
             y = None if not use_label else y.to(device, non_blocking=True)
-            model.zero_grad()
             if is_latent_data:
                 z_0 = x_0 * args.scale_factor
             else:
                 z_0 = first_stage_model.encode(x_0).latent_dist.sample().mul_(args.scale_factor)
             z_1 = torch.randn_like(z_0)
+            model_kwargs = {"y": y}
             # #sample t
             # t = torch.rand((z_0.size(0),), dtype=dtype, device=device)
             # t = t.view(-1, 1, 1, 1)
@@ -230,12 +253,39 @@ def train(rank, gpu, args):
             # v = model(t.squeeze(), v_t, y)
             # fm_loss = F.mse_loss(v, u) 
 
-            model_kwargs = {"y": y}
-            v_pred, v_target, gt_flow = flow.get_train_tuple(z_0, z_1, model_kwargs=model_kwargs)
+            z_t, t, gt_flow, pred_z0 = flow.get_train_tuple_flow(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
+            for p in modelD.parameters():
+                p.requires_grad = True
+            modelD.zero_grad()
+
+            Dreal = modelD(z_0, c=y)
+            Dreal_loss = F.softplus(-Dreal).mean()
+
+            grad_real = 0.
+            if args.lazy_reg is None:
+                grad_real = grad_penalty_call(args, Dreal, z_0)
+            else:
+                if global_step % args.lazy_reg == 0:
+                    grad_real = grad_penalty_call(args, Dreal, z_0)
+            
+            Dfake = modelD(pred_z0, c=y)
+            Dfake_loss = F.softplus(Dfake).mean()
+            Dloss = Dreal_loss + grad_real + Dfake_loss
+            optimizerD.step()
+
+            v_pred, v_target, gt_flow, pred_z0 = flow.get_train_tuple(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
+            for p in modelD.parameters():
+                p.requires_grad = False
+            model.zero_grad()
+
+            out = modelD(pred_z0, c=y)
+            Gloss = F.softplus(-out).mean()
+
             fm_loss = 0. if not args.fm_loss else F.mse_loss(v_pred, gt_flow)
             con_loss = F.mse_loss(v_pred, v_target)
 
-            loss = fm_loss + con_loss
+            # loss = fm_loss + con_loss
+            loss = Gloss + fm_loss + con_loss
             loss.backward()
             optimizer.step()
 
@@ -248,10 +298,17 @@ def train(rank, gpu, args):
                     # Measure training speed:
                     end_time = time()
                     steps_per_sec = 100 / (end_time - start_time)
-                    logger.info('epoch {} iteration{}, Loss: {}, FMLoss: {}, CONLoss: {}, Train Steps/Sec: {:.2f}'.format(epoch,iteration, 
+                    # logger.info('epoch {} iteration{}, Loss: {}, FMLoss: {}, CONLoss: {}, Train Steps/Sec: {:.2f}'.format(epoch,iteration, 
+                    #     loss.item(), 
+                    #     0. if not args.fm_loss else fm_loss.item(), 
+                    #     con_loss.item(), 
+                    #     steps_per_sec))
+                    logger.info('epoch {} iteration{}, Loss: {}, FMLoss: {}, CONLoss: {}, GLoss: {}, DLoss: {}, Train Steps/Sec: {:.2f}'.format(epoch,iteration, 
                         loss.item(), 
                         0. if not args.fm_loss else fm_loss.item(), 
                         con_loss.item(), 
+                        Gloss.item(),
+                        Dloss.item(),
                         steps_per_sec))
                     start_time = time()
 
@@ -277,6 +334,8 @@ def train(rank, gpu, args):
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
                                'scheduler': scheduler.state_dict(),
+                               'modelD_dict': modelD.state_dict(), 'optimizerD': optimizerD.state_dict(),
+                               'schedulerD': schedulerD.state_dict()
                                }
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
@@ -367,6 +426,17 @@ if __name__ == '__main__':
     parser.add_argument('--num_timesteps', type=int, default=200)
     parser.add_argument('--discrete_timesteps', action='store_true', default=False)
     parser.add_argument('--fm_loss', action='store_true', default=False)
+
+    # discriminator
+    parser.add_argument('--lrD', type=float, default=1e-4, help='learning rate d')
+    parser.add_argument('--d_base_channels', type=int, default=32768,
+                            help='number of discriminator base channels')
+    parser.add_argument('--r1_gamma', type=float,
+                        default=0.05, help='coef for r1 reg')
+    parser.add_argument('--lazy_reg', type=int, default=None,
+                        help='lazy regulariation.')
+    parser.add_argument('--d_temb_channels', type=int, default=None,
+                        help='number of discriminator temb channels')
 
     # training
     parser.add_argument('--exp', default='experiment_cifar_default', help='name of experiment')

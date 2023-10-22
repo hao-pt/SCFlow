@@ -15,6 +15,14 @@ def create_network(config):
         num_classes=config.num_classes
     )
 
+def create_discriminator(config):
+    kwargs = dict(c_dim=0, img_resolution=config.image_size//config.f, 
+        img_channels=config.num_in_channels, channel_base=config.d_base_channels,
+        temb_dim=config.d_temb_channels)
+    model = discriminator.Discriminator(**kwargs)
+    return model
+
+
 
 def get_flow_model(config):
     if config.layout:
