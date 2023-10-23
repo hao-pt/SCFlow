@@ -39,7 +39,7 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 # --multi_gpu 
 python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-    --batch_size 8 --num_epoch 500 \
+    --batch_size 32 --num_epoch 500 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
     --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
     --use_origin_adm \
