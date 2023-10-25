@@ -214,7 +214,7 @@ def train(rank, gpu, args):
         scheduler.load_state_dict(checkpoint['scheduler'])
         global_step = checkpoint["global_step"]
         # load D
-        netD.load_state_dict(checkpoint['modelD_dict'])
+        modelD.load_state_dict(checkpoint['modelD_dict'])
         optimizerD.load_state_dict(checkpoint['optimizerD'])
         schedulerD.load_state_dict(checkpoint['schedulerD'])
 
