@@ -162,7 +162,7 @@ def train(rank, gpu, args):
                                                num_workers=4,
                                                pin_memory=True,
                                                sampler=train_sampler,
-                                               drop_last = True)
+                                               drop_last=True)
 
     model = create_network(args).to(device, dtype=dtype)
     if args.use_grad_checkpointing and "DiT" in args.model_type:
@@ -214,7 +214,7 @@ def train(rank, gpu, args):
         scheduler.load_state_dict(checkpoint['scheduler'])
         global_step = checkpoint["global_step"]
         # load D
-        netD.load_state_dict(checkpoint['modelD_dict'])
+        modelD.load_state_dict(checkpoint['modelD_dict'])
         optimizerD.load_state_dict(checkpoint['optimizerD'])
         schedulerD.load_state_dict(checkpoint['schedulerD'])
 
@@ -255,27 +255,26 @@ def train(rank, gpu, args):
             # v = model(t.squeeze(), v_t, y)
             # fm_loss = F.mse_loss(v, u)
 
-            with torch.autograd.set_detect_anomaly(True):
-                z_t, t, gt_flow, pred_z0 = flow.get_train_tuple_flow(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
-                for p in modelD.parameters():
-                    p.requires_grad = True
-                modelD.zero_grad()
+            z_t, t, gt_flow, pred_z0 = flow.get_train_tuple_flow(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
+            for p in modelD.parameters():
+                p.requires_grad = True
+            modelD.zero_grad()
 
-                Dreal = modelD(z_0, c=y)
-                Dreal_loss = F.softplus(-Dreal).mean()
+            Dreal = modelD(z_0, c=y)
+            Dreal_loss = F.softplus(-Dreal).mean()
 
-                grad_real = 0.
-                if args.lazy_reg is None:
+            grad_real = 0.
+            if args.lazy_reg is None:
+                grad_real = grad_penalty_call(args, Dreal, z_0)
+            else:
+                if global_step % args.lazy_reg == 0:
                     grad_real = grad_penalty_call(args, Dreal, z_0)
-                else:
-                    if global_step % args.lazy_reg == 0:
-                        grad_real = grad_penalty_call(args, Dreal, z_0)
-                
-                Dfake = modelD(pred_z0, c=y)
-                Dfake_loss = F.softplus(Dfake).mean()
-                Dloss = Dreal_loss + grad_real + Dfake_loss
-                Dloss.backward()
-                optimizerD.step()
+            
+            Dfake = modelD(pred_z0, c=y)
+            Dfake_loss = F.softplus(Dfake).mean()
+            Dloss = Dreal_loss + grad_real + Dfake_loss
+            Dloss.backward()
+            optimizerD.step()
 
             v_pred, v_target, gt_flow, pred_z0 = flow.get_train_tuple(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
             for p in modelD.parameters():
@@ -495,6 +494,11 @@ if __name__ == '__main__':
     size = args.num_process_per_node
 
     if size > 1:
+        try:
+            torch.multiprocessing.set_start_method('spawn')
+        except RuntimeError:
+            pass
+        
         processes = []
         for rank in range(size):
             args.local_rank = rank
