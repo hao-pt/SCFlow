@@ -136,20 +136,20 @@ def train(rank, gpu, args):
             config_dict = vars(args)
             OmegaConf.save(config_dict, os.path.join(exp_path, "config.yaml"))
 
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO,
-        handlers=[
-            logging.StreamHandler(), 
-            logging.FileHandler(f"{exp_path}/log.txt")]
-    )
-    # Creating an object
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-    logger.info(f"Exp path: {exp_path}")
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+        logging.basicConfig(
+            format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+            datefmt="%m/%d/%Y %H:%M:%S",
+            level=logging.INFO,
+            handlers=[
+                logging.StreamHandler(), 
+                logging.FileHandler(f"{exp_path}/log.txt")]
+        )
+        # Creating an object
+        logger = logging.getLogger(__name__)
+        logger.setLevel(logging.INFO)
+        logger.info(f"Exp path: {exp_path}")
 
     batch_size = args.batch_size
     dataset = get_dataset(args)
@@ -175,8 +175,9 @@ def train(rank, gpu, args):
     for param in first_stage_model.parameters():
         param.requires_grad = False
 
-    logger.info('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
-    logger.info('FM size: {:.3f}MB'.format(get_weight(model)))
+    if rank == 0:
+        logger.info('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
+        logger.info('FM size: {:.3f}MB'.format(get_weight(model)))
 
     modelD = create_discriminator(args).to(device, dtype=dtype)
 
@@ -199,9 +200,13 @@ def train(rank, gpu, args):
     modelD.train()
 
     if args.model_ckpt:
+        # teacher = copy.deepcopy(model)
         ckpt = torch.load(args.model_ckpt, map_location=device)
         model.load_state_dict(ckpt)
+        # for param in model.parameters():
+        #     param.requires_grad = False
         teacher = copy.deepcopy(model)
+        teacher.eval()
 
     if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
@@ -218,8 +223,9 @@ def train(rank, gpu, args):
         optimizerD.load_state_dict(checkpoint['optimizerD'])
         schedulerD.load_state_dict(checkpoint['schedulerD'])
 
-        logger.info("=> resume checkpoint (epoch {})"
-                  .format(checkpoint['epoch']))
+        if rank == 0:
+            logger.info("=> resume checkpoint (epoch {})"
+                    .format(checkpoint['epoch']))
         del checkpoint
 
     else:
@@ -326,10 +332,16 @@ def train(rank, gpu, args):
                     if y is not None:
                         y = y[:4]
                     sample_model = partial(model, y=y)
-                    fake_sample = flow.sample_ode_generative(rand, args.num_sample_timesteps)[0][-1]
-                    fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
-                # torchvision.utils.save_image(fake_sample, os.path.join(exp_path, 'sample_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
-                torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
+                    traj, x0_list = flow.sample_ode_generative(rand, args.num_sample_timesteps)
+                    fake_image = traj[-1]
+                    fake_image = first_stage_model.decode(fake_image / args.scale_factor).sample
+                traj = torch.cat(traj, dim=0)
+                traj = first_stage_model.decode(traj / args.scale_factor).sample
+                x0_list = torch.cat(x0_list, dim=0)
+                x0_list = first_stage_model.decode(x0_list / args.scale_factor).sample
+                torchvision.utils.save_image(x0_list, os.path.join(exp_path, 'x0_epoch_{}.png'.format(epoch)), normalize=True, nrow=4)
+                torchvision.utils.save_image(traj, os.path.join(exp_path, 'traj_epoch_{}.png'.format(epoch)), normalize=True, nrow=4)
+                torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}.png'.format(epoch)), normalize=True)
                 logger.info("Finish sampling")
 
             if args.save_content:
@@ -473,7 +485,7 @@ if __name__ == '__main__':
     parser.add_argument('--save_content', action='store_true', default=False)
     parser.add_argument('--save_content_every', type=int, default=10, help='save content for resuming every x epochs')
     parser.add_argument('--save_ckpt_every', type=int, default=25, help='save ckpt every x epochs')
-    parser.add_argument('--plot_every', type=int, default=5, help='plot every x epochs')
+    parser.add_argument('--plot_every', type=int, default=1, help='plot every x epochs')
 
     ###ddp
     parser.add_argument('--num_proc_node', type=int, default=1,

@@ -4,6 +4,7 @@ from tqdm import tqdm
 from .utils import alpha, dalpha_dt, d_1_minus_alpha_sq_dt
 from scipy import integrate
 import functools
+import numpy as np
 
 class BaseFlow():
 	def __init__(self, device, model=None, ema_model=None, num_steps=1000):
@@ -48,13 +49,15 @@ class BaseFlow():
 		if solver == 'heun':
 			N = (N + 1) // 2
 		dt = -1./N
+    
 		traj = [] # to store the trajectory
 		x0hat_list = []
 		z = z1.detach().clone()
 		batchsize = z.shape[0]
-		
 		traj.append(z.detach().clone())
+    
 		for i in tq(reversed(range(1,N+1))):
+      
 			t = torch.ones((batchsize,1), device=self.device) * i / N
 			t_next = torch.ones((batchsize,1), device=self.device) * (i-1) / N
 			if len(z1.shape) == 2:
@@ -174,8 +177,8 @@ class ConsistencyFlow(RectifiedFlow):
         if return_pred_z0:
           shape = [t.size(0)] + [1] * (len(v.shape) - 1)
           pred_z0 = z_t - t.reshape(*shape) * v
-          return z_t, t, target, pred_z0
-        return z_t, t, target
+          return v, t, target, pred_z0
+        return v, t, target
 
     def get_train_tuple(self, z0=None, z1=None, t=None, eps=1e-5, model_kwargs={}, return_pred_z0=False):
         if t is None:
@@ -183,12 +186,13 @@ class ConsistencyFlow(RectifiedFlow):
                 t = torch.randint(1, self.TN+1, (z0.shape[0],)).to(z1.device).float() / self.TN
                 dt = 1/self.TN
             else:
-                t = torch.rand((z0.shape[0],)).to(z1.device).float()
-                t = t * (1 - eps) + eps
-                dt = eps + 1/self.TN
+                t = ((1-1/self.TN)*torch.rand((z0.shape[0],)) + 1/self.TN).to(z1.device).float()
+                dt = 1/self.TN
+                # t = t * (1 - eps) + eps
+                # dt = eps + 1/self.TN
 
         t_onl = t if self.skip == 0 else torch.clamp(t + (self.skip / self.TN), 1/self.TN, 1.)
-            
+                    
         if len(z1.shape) == 2:
             # pre_z_t = (eps + (1 - eps) * t) * z1 + (1. - t) * z
             pre_z_t = t_onl * z1 + (1. - t_onl) * z0
@@ -200,29 +204,30 @@ class ConsistencyFlow(RectifiedFlow):
         else:
             raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
 
+        delta_t = (torch.rand((1,))*(20/self.TN)).to(t.device)
         if self.pretrained_model is not None:
             with torch.no_grad():
-                now_z_t = pre_z_t - (1/self.TN) * self.pretrained_model(t, pre_z_t, y=model_kwargs.get("y", None))
-            now_t = torch.clamp(t - (1/self.TN), 1/self.TN, 1)
+                now_z_t = pre_z_t - delta_t * self.pretrained_model(t_onl, pre_z_t, y=model_kwargs.get("y", None))
+            now_t = torch.clamp(t_onl - delta_t, 0, 1)
         else:
-            now_z_t = pre_z_t - (1/self.TN) * (z1 - z0)
+            now_z_t = pre_z_t - delta_t * (z1 - z0)
             # with torch.no_grad():
             #     now_z_t = pre_z_t - (1/self.TN) * self.ema_model(t, pre_z_t, y=model_kwargs.get("y", None))
-            now_t = torch.clamp(t - (1/self.TN), eps, 1)
+            now_t = torch.clamp(t_onl - delta_t, 0, 1)
 
             # now_t = torch.clamp(t/2., eps, 1)
             # now_t = now_t.view(-1, 1, 1, 1)
             # now_z_t = now_t * z1 + (1. - now_t) * z0
             # now_t = now_t.view(-1)
-        mask = (t>=dt)
+        # mask = (t>=dt)
         pred_z_t = self.model(t_onl, pre_z_t, **model_kwargs)
         gt_flow = z1 - z0
         with torch.no_grad():
             gt_z_t = self.ema_model(now_t, now_z_t, **model_kwargs).detach()
-            gt_z_t[~mask] = (z1-z0)[~mask]
+            # gt_z_t[~mask] = (z1-z0)[~mask]
         if return_pred_z0:
           shape = [t.size(0)] + [1] * (len(pred_z_t.shape) - 1)
-          pred_z0 = pre_z_t - t.reshape(*shape) * pred_z_t
+          pred_z0 = pre_z_t - t_onl.reshape(*shape) * pred_z_t
           return pred_z_t, gt_z_t, gt_flow, pred_z0
         return pred_z_t, gt_z_t, gt_flow
 
