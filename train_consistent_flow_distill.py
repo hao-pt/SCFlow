@@ -249,17 +249,6 @@ def train(rank, gpu, args):
             z_0.requires_grad = True
             z_1 = torch.randn_like(z_0)
             model_kwargs = {"y": y}
-            # #sample t
-            # t = torch.rand((z_0.size(0),), dtype=dtype, device=device)
-            # t = t.view(-1, 1, 1, 1)
-            # # corrected notation: 1 is real noise, 0 is real data
-            # v_t = (1 - t) * z_0 + (1e-5 + (1 - 1e-5) * t) * z_1
-            # u = (1 - 1e-5) * z_1 - z_0
-            # # alternative notation (similar to flow matching): 1 is data, 0 is real noise
-            # # v_t = (1 - (1 - 1e-5) * t) * z_0 + t * z_1
-            # # u = z_1 - (1 - 1e-5) * z_0
-            # v = model(t.squeeze(), v_t, y)
-            # fm_loss = F.mse_loss(v, u)
 
             z_t, t, gt_flow, pred_z0 = flow.get_train_tuple_flow(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
             for p in modelD.parameters():
@@ -282,7 +271,7 @@ def train(rank, gpu, args):
             Dloss.backward()
             optimizerD.step()
 
-            v_pred, v_target, gt_flow, pred_z0 = flow.get_train_tuple(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
+            v_pred, v_target, gt_flow, pred_z0, gt_z0 = flow.get_train_tuple(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
             for p in modelD.parameters():
                 p.requires_grad = False
             model.zero_grad()
@@ -290,8 +279,8 @@ def train(rank, gpu, args):
             out = modelD(pred_z0, c=y)
             Gloss = F.softplus(-out).mean()
 
-            fm_loss = 0. if not args.fm_loss else F.mse_loss(v_pred, gt_flow)
-            con_loss = F.mse_loss(v_pred, v_target)
+            fm_loss = 0. if not args.fm_loss else F.mse_loss(z_0, pred_z0)
+            con_loss = F.mse_loss(pred_z0, gt_z0)
 
             # loss = fm_loss + con_loss
             loss = Gloss + fm_loss + con_loss
@@ -307,11 +296,6 @@ def train(rank, gpu, args):
                     # Measure training speed:
                     end_time = time()
                     steps_per_sec = 100 / (end_time - start_time)
-                    # logger.info('epoch {} iteration{}, Loss: {}, FMLoss: {}, CONLoss: {}, Train Steps/Sec: {:.2f}'.format(epoch,iteration, 
-                    #     loss.item(), 
-                    #     0. if not args.fm_loss else fm_loss.item(), 
-                    #     con_loss.item(), 
-                    #     steps_per_sec))
                     logger.info('epoch {} iteration{}, Loss: {}, FMLoss: {}, CONLoss: {}, GLoss: {}, DLoss: {}, Train Steps/Sec: {:.2f}'.format(epoch,iteration, 
                         loss.item(), 
                         0. if not args.fm_loss else fm_loss.item(), 

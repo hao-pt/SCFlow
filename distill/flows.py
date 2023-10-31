@@ -188,48 +188,37 @@ class ConsistencyFlow(RectifiedFlow):
             else:
                 t = ((1-1/self.TN)*torch.rand((z0.shape[0],)) + 1/self.TN).to(z1.device).float()
                 dt = 1/self.TN
-                # t = t * (1 - eps) + eps
-                # dt = eps + 1/self.TN
-
-        t_onl = t if self.skip == 0 else torch.clamp(t + (self.skip / self.TN), 1/self.TN, 1.)
-                    
+                     
         if len(z1.shape) == 2:
-            # pre_z_t = (eps + (1 - eps) * t) * z1 + (1. - t) * z
-            pre_z_t = t_onl * z1 + (1. - t_onl) * z0
+            pre_zt = t * z1 + (1. - t) * z0
         elif len(z1.shape) == 4:
-            t_onl = t_onl.view(-1, 1, 1, 1)
-            # pre_z_t = (eps + (1 - eps) * t) * z1 + (1. - t) * z
-            pre_z_t = t_onl * z1 + (1. - t_onl) * z0
-            t_onl = t_onl.view(-1)
+            t = t.view(-1, 1, 1, 1)
+            pre_zt = t * z1 + (1. - t) * z0
+            t = t.squeeze()
         else:
             raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
-
-        delta_t = (torch.rand((1,))*(20/self.TN)).to(t.device)
+        
+        # local consistency
+        t_bound = copy.deepcopy(t)
+        t_bound[t_bound >= 0.1] = 0.1
+        delta_t = (torch.rand_like(t)*t_bound).to(t.device)
         if self.pretrained_model is not None:
             with torch.no_grad():
-                now_z_t = pre_z_t - delta_t * self.pretrained_model(t_onl, pre_z_t, y=model_kwargs.get("y", None))
-            now_t = torch.clamp(t_onl - delta_t, 0, 1)
+                now_zt = pre_zt - delta_t.view(-1, 1, 1, 1) * self.pretrained_model(t, pre_zt, y=model_kwargs.get("y", None))
+            now_t = torch.clamp(t - delta_t, 0, 1)
         else:
-            now_z_t = pre_z_t - delta_t * (z1 - z0)
-            # with torch.no_grad():
-            #     now_z_t = pre_z_t - (1/self.TN) * self.ema_model(t, pre_z_t, y=model_kwargs.get("y", None))
-            now_t = torch.clamp(t_onl - delta_t, 0, 1)
-
-            # now_t = torch.clamp(t/2., eps, 1)
-            # now_t = now_t.view(-1, 1, 1, 1)
-            # now_z_t = now_t * z1 + (1. - now_t) * z0
-            # now_t = now_t.view(-1)
-        # mask = (t>=dt)
-        pred_z_t = self.model(t_onl, pre_z_t, **model_kwargs)
+            now_zt = pre_zt - delta_t * (z1 - z0)
+            now_t = torch.clamp(t - delta_t, 0, 1)
+        
+        pred_vt = self.model(t, pre_zt, **model_kwargs)
         gt_flow = z1 - z0
         with torch.no_grad():
-            gt_z_t = self.ema_model(now_t, now_z_t, **model_kwargs).detach()
-            # gt_z_t[~mask] = (z1-z0)[~mask]
+            gt_vt = self.ema_model(now_t, now_zt, **model_kwargs).detach()
         if return_pred_z0:
-          shape = [t.size(0)] + [1] * (len(pred_z_t.shape) - 1)
-          pred_z0 = pre_z_t - t_onl.reshape(*shape) * pred_z_t
-          return pred_z_t, gt_z_t, gt_flow, pred_z0
-        return pred_z_t, gt_z_t, gt_flow
+          pred_z0 = pre_zt - t.view(-1, 1, 1, 1) * pred_vt
+          gt_z0 = now_zt - now_t.view(-1, 1, 1, 1) * gt_vt
+          return pred_vt, gt_vt, gt_flow, pred_z0, gt_z0
+        return pred_vt, gt_vt, gt_flow
 
   
 class ProgDistFlow(RectifiedFlow):
