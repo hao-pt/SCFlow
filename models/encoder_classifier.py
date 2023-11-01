@@ -25,7 +25,6 @@ def create_classifier(
     classifier_resblock_updown,
     classifier_pool,
 ):
-
     if classifier_image_size == 512:
         channel_mult = (0.5, 1, 1, 2, 2, 4, 4)
     elif classifier_image_size == 256:
@@ -57,4 +56,5 @@ def create_classifier(
         num_head_channels=64,
         use_scale_shift_norm=classifier_use_scale_shift_norm,
         resblock_updown=classifier_resblock_updown,
-        pool=classifier_pool,)
+        pool=classifier_pool,
+)

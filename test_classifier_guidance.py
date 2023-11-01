@@ -1,10 +1,8 @@
-
 import argparse
 import torch
 import torch.nn.functional as F
 import os
 import numpy as np
-
 from tqdm import tqdm
 from torchdiffeq import odeint_adjoint as odeint
 import torchvision
@@ -29,7 +27,6 @@ def args_to_dict(args, keys):
     return {k: getattr(args, k) for k in keys}
 
 ADAPTIVE_SOLVER = ["dopri5", "dopri8", "adaptive_heun", "bosh3"]
-
 FIXER_SOLVER = ["euler", "rk4", "midpoint", "stochastic"]
 
 
@@ -41,7 +38,7 @@ def get_cond(classifier, x, s, y, scale, **kwargs):
         logits = classifier(x_in, s_)
         log_probs = torch.log_softmax(logits, dim=-1)
         selected = log_probs[range(len(logits)), y.view(-1)]
-        return torch.autograd.grad(selected.sum(), x_in)[0] * scale * s / (1-s)
+        return 2 * torch.autograd.grad(selected.sum(), x_in)[0] * scale * s/(1 + 1e-4 - s)
 
 def get_sampler(flow_model, n_steps, device = "cuda"):
     t_final = 0.
@@ -58,7 +55,7 @@ def get_sampler(flow_model, n_steps, device = "cuda"):
             # list_vec.append(vec)
             nfes += 1
             h = (t[n + 1] - t[n])
-            x = x +  vec
+            x = x + h * vec
             # xs.append(x)
         return x, nfes, list_vec, xs
     
@@ -79,12 +76,10 @@ def get_sampler(flow_model, n_steps, device = "cuda"):
             # list_vec.append(vec)
             nfes += 1
             h = (t[n + 1] - t[n])
-
-            x = x +  h*vec
+            x = x + h*vec
             # xs.append(x)
         return x, nfes, list_vec, xs
     return sampler, sampler_cond
-
 
 
 def sample_from_model(model, x_0, model_kwargs, classifier, args):
@@ -97,7 +92,6 @@ def sample_from_model(model, x_0, model_kwargs, classifier, args):
             "step_size": args.step_size,
             "perturb": args.perturb
         }
-
     if args.compute_nfe:
         # model.count_nfe = True
         model = NFECount(model).to(x_0.device) # count wrapper
@@ -152,6 +146,63 @@ def sample_from_model2(model, x, model_kwargs, generator, classifier, args):
         )
     return sample
 
+
+# def get_sampler(flow_model, n_steps, device = "cuda"):
+#     t_final = 0.
+#     t_start = 1.
+#     t = torch.linspace(t_start, t_final, n_steps + 1, device=device)
+    
+#     def sampler(x):
+#         list_vec = []
+#         xs = []
+#         ones = torch.ones(x.shape[0], device=device)
+#         nfes = 0
+#         for n in range(n_steps):
+#             vec = flow_model(ones * t[n], x)
+#             # list_vec.append(vec)
+#             nfes += 1
+#             h = (t[n + 1] - t[n])
+#             x = x + h * vec
+#             # xs.append(x)
+#         return x, nfes, list_vec, xs
+    
+#     def sampler_cond(x, y, classifier, scale):
+#         list_vec = []
+#         xs = []
+#         ones = torch.ones(x.shape[0], device=device)
+#         y  = torch.ones(x.shape[0], device=device)*y
+#         y = y.long()
+#         nfes = 0
+#         for n in range(n_steps):
+#             s = n/n_steps
+#             with torch.no_grad():
+#                 vec = flow_model(ones * t[n], x)
+#             cond_vec = get_cond(classifier, x, s, y, scale)
+#             # print("cond {}".format(n), torch.max(cond_eps), torch.min(cond_eps))
+#             # print("vec {}".format(n), torch.max(vec), torch.min(vec))
+#             vec = vec + cond_vec
+#             # list_vec.append(vec)
+#             nfes += 1
+#             h = (t[n + 1] - t[n])
+#             x = x + h * vec
+#             # xs.append(x)
+#         return x, nfes, list_vec, xs
+#     return sampler, sampler_cond
+
+
+def sample_and_test(rank, gpu, args):
+    from diffusers.models import AutoencoderKL
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.set_grad_enabled(False)
+
+    seed = args.seed + rank
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    device = torch.device('cuda:{}'.format(gpu))
+>>>>>>> origin/hao_dev
+>>>>>>> be09ffe39dc9027751d6ba6da84a05ada4eb986c
     
     if args.dataset == 'cifar10':
         real_img_dir = 'pytorch_fid/cifar10_train_stat.npy'
@@ -180,7 +231,6 @@ def sample_from_model2(model, x, model_kwargs, generator, classifier, args):
     for key in list(classifier_ckpt.keys()):
         classifier_ckpt[key[7:]] = classifier_ckpt.pop(key)
     classifier.load_state_dict(classifier_ckpt)
-
     # model =  get_flow_model(args).to(device)
     model = create_network(args).to(device)
     ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
@@ -310,7 +360,6 @@ def sample_from_model2(model, x, model_kwargs, generator, classifier, args):
         #     torchvision.utils.save_image(to_range_0_1(x), './list_image/img_{}.jpg'.format(idx))
         
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('ddgan parameters')
     parser.add_argument('--generator', type=str, default="determ",
@@ -354,7 +403,6 @@ if __name__ == '__main__':
                             help='resolution of applying attention')
     parser.add_argument('--ch_mult', nargs='+', type=int, default=(1,2,2,2),
                             help='channel mult')
-
     parser.add_argument('--label_dim', type=int, default=0,
                             help='label dimension, 0 if unconditional')
     parser.add_argument('--augment_dim', type=int, default=0,
@@ -363,7 +411,6 @@ if __name__ == '__main__':
                             help='drop-out rate')
     parser.add_argument('--num_classes', type=int, default=None,
                             help='num classes')
-
     parser.add_argument('--label_dropout', type=float, default=0.,
                             help='Dropout probability of class labels for classifier-free guidance')
 
@@ -374,13 +421,11 @@ if __name__ == '__main__':
     parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="stabilityai/sd-vae-ft-mse")
     parser.add_argument('--output_log', type=str, default="")
     
-    #######################################
     parser.add_argument('--exp', default='exp_1_OT', help='name of experiment')
     parser.add_argument('--real_img_dir', default='./pytorch_fid/cifar10_train_stat.npy', help='directory to real images for FID computation')
     parser.add_argument('--dataset', default='cifar10', help='name of dataset')
     parser.add_argument('--num_timesteps', type=int, default=200)
     parser.add_argument('--batch_size', type=int, default=16, help='sample generating batch size')
-
     parser.add_argument('--classifier_image_size', type=int, default=32, help='num of resblock')    
     parser.add_argument('--classifier_depth', type=int, default=3, help='num of resblock')
     parser.add_argument('--classifier_width', type=int, default=192, help='num of resblock')

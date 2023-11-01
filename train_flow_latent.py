@@ -16,6 +16,10 @@ import logging
 import numpy as np
 import torch
 from torchdiffeq import odeint_adjoint as odeint
+<<<<<<< HEAD
+=======
+>>>>>>> origin/hao_dev
+>>>>>>> be09ffe39dc9027751d6ba6da84a05ada4eb986c
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -49,7 +53,102 @@ def sample_from_model(model, x_0):
     fake_image = odeint(model, x_0, t, atol=1e-5, rtol=1e-5, adjoint_params=model.func.parameters())
     return fake_image
 
+<<<<<<< HEAD
 
+=======
+# def trace_df_dx_hutchinson(f, x, noise, no_autograd):
+#     """
+#     Hutchinson's trace estimator for Jacobian df/dx, O(1) call to autograd
+#     """
+#     if no_autograd:
+#         # the following is compatible with checkpointing
+#         torch.sum(f * noise).backward()
+#         # torch.autograd.backward(tensors=[f], grad_tensors=[noise])
+#         jvp = x.grad
+#         trJ = torch.sum(jvp * noise, dim=[1, 2, 3])
+#         x.grad = None
+#     else:
+#         jvp = torch.autograd.grad(f, x, noise, create_graph=False)[0]
+#         trJ = torch.sum(jvp * noise, dim=[1, 2, 3])
+#         # trJ = torch.einsum('bijk,bijk->b', jvp, noise)  # we could test if there's a speed difference in einsum vs sum
+# 
+#     return trJ
+
+# def compute_ode_nll(self, dae, eps, ode_eps, ode_solver_tol, enable_autocast, no_autograd, num_samples, report_std):
+#         """ calculates NLL based on ODE framework, assuming integration cutoff ode_eps """
+#         # ODE solver starts consuming the CPU memory without this on large models
+#         # https://github.com/scipy/scipy/issues/10070
+#         gc.collect()
+
+#         dae.eval()
+
+#         def ode_func(t, state):
+#             """ the ode function (including log probability integration for NLL calculation) """
+#             global nfe_counter
+#             nfe_counter = nfe_counter + 1
+
+#             x = state[0].detach()
+#             x.requires_grad_(True)
+#             noise = torch.randn_like(x, device='cuda')  # could also use rademacher noise (sample_rademacher_like)
+#             with torch.set_grad_enabled(True):
+#                 with autocast(enabled=enable_autocast):
+#                     variance = self.var(t=t)
+#                     mixing_component = self.mixing_component(x_noisy=x, var_t=variance, t=t, enabled=dae.mixed_prediction)
+#                     pred_params = dae(x=x, t=t)
+#                     params = get_mixed_prediction(dae.mixed_prediction, pred_params, dae.mixing_logit, mixing_component)
+#                     dx_dt = self.f(t=t) * x + 0.5 * self.g2(t=t) * params / torch.sqrt(variance)
+
+#                 with autocast(enabled=False):
+#                     dlogp_x_dt = -trace_df_dx_hutchinson(dx_dt, x, noise, no_autograd).view(x.shape[0], 1)
+
+#             return (dx_dt, dlogp_x_dt)
+
+#         # NFE counter
+#         global nfe_counter
+
+#         nll_all, nfe_all = [], []
+#         for i in range(num_samples):
+#             # integrated log probability
+#             logp_diff_t0 = torch.zeros(eps.shape[0], 1, device='cuda')
+
+#             nfe_counter = 0
+
+#             # solve the ODE
+#             x_t, logp_diff_t = odeint(
+#                 ode_func,
+#                 (eps, logp_diff_t0),
+#                 torch.tensor([ode_eps, 1.0], device='cuda'),
+#                 atol=ode_solver_tol,
+#                 rtol=ode_solver_tol,
+#                 method="scipy_solver",
+#                 options={"solver": 'RK45'},
+#             )
+#             # last output values
+#             x_t0, logp_diff_t0 = x_t[-1], logp_diff_t[-1]
+
+#             # prior
+#             if self.sde_type == 'vesde':
+#                 logp_prior = torch.sum(util.distributions.log_p_var_normal(x_t0, var=self.sigma2_max), dim=[1, 2, 3])
+#             else:
+#                 logp_prior = torch.sum(util.distributions.log_p_standard_normal(x_t0), dim=[1, 2, 3])
+
+#             log_likelihood = logp_prior - logp_diff_t0.view(-1)
+
+#             nll_all.append(-log_likelihood)
+#             nfe_all.append(nfe_counter)
+
+#         nfe_mean = np.mean(nfe_all)
+#         nll_all = torch.stack(nll_all, dim=1)
+#         nll_mean = torch.mean(nll_all, dim=1)
+#         if num_samples > 1 and report_std:
+#             nll_stddev = torch.std(nll_all, dim=1)
+#             nll_stddev_batch = torch.mean(nll_stddev)
+#             nll_stderror_batch = nll_stddev_batch / np.sqrt(num_samples)
+#         else:
+#             nll_stddev_batch = None
+#             nll_stderror_batch = None
+#         return nll_mean, nfe_mean, nll_stddev_batch, nll_stderror_batch
+>>>>>>> be09ffe39dc9027751d6ba6da84a05ada4eb986c
 
 #%%
 def train(rank, gpu, args):
@@ -355,7 +454,10 @@ if __name__ == '__main__':
                         help='rank of process in the node')
     parser.add_argument('--master_address', type=str, default='127.0.0.1',
                         help='address for master')
+<<<<<<< HEAD
 
+=======
+>>>>>>> be09ffe39dc9027751d6ba6da84a05ada4eb986c
     parser.add_argument('--master_port', type=str, default='6000',
                         help='port for master')
 
