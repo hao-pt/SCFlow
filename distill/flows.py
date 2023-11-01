@@ -153,7 +153,7 @@ class ConsistencyFlow(RectifiedFlow):
         self.model = model
         self.N = num_steps
         self.TN = TN
-        self.skip = 1
+        self.skip = skip
         self.device = device
     
     def get_train_tuple_flow(self, z0=None, z1=None, t = None, eps=1e-5, model_kwargs={}, return_pred_z0=False):
@@ -200,7 +200,7 @@ class ConsistencyFlow(RectifiedFlow):
         
         # local consistency
         t_bound = copy.deepcopy(t)
-        t_bound[t_bound >= 0.1] = 0.1
+        t_bound[t_bound >= self.skip/self.TN] = self.skip/self.TN
         delta_t = (torch.rand_like(t)*t_bound).to(t.device)
         if self.pretrained_model is not None:
             with torch.no_grad():
@@ -213,12 +213,38 @@ class ConsistencyFlow(RectifiedFlow):
         pred_vt = self.model(t, pre_zt, **model_kwargs)
         gt_flow = z1 - z0
         with torch.no_grad():
-            gt_vt = self.ema_model(now_t, now_zt, **model_kwargs).detach()
+          gt_vt = self.ema_model(now_t, now_zt, **model_kwargs).detach()
         if return_pred_z0:
           pred_z0 = pre_zt - t.view(-1, 1, 1, 1) * pred_vt
           gt_z0 = now_zt - now_t.view(-1, 1, 1, 1) * gt_vt
           return pred_vt, gt_vt, gt_flow, pred_z0, gt_z0
         return pred_vt, gt_vt, gt_flow
+
+    def get_train_tuple_flow_from_pretrained_model(self, z0=None, z1=None, t = None, eps=1e-5, model_kwargs={}, return_pred_z0=False):
+        if t is None:
+            if self.discrete:
+                t = torch.randint(1,self.TN+1,(z0.shape[0],)).to(z1.device).float()/self.TN
+            else:
+                t = torch.rand((z1.shape[0], 1), device=self.device)
+                t = t * (1 - eps) + eps
+
+        target = z1 - z0
+        # v = self.model(torch.ones_like(t), z1, **model_kwargs)
+        # pred_z0 = z1 - v
+        pred_z0 = self.model(torch.ones_like(t), z1, **model_kwargs)
+
+        if len(z1.shape) == 2:
+            pred_z_t =  t * z1 + (1.-t) * pred_z0
+        elif len(z1.shape) == 4:
+            t = t.view(-1, 1, 1, 1)
+            pred_z_t = t * z1 + (1.-t) * pred_z0
+            t = t.view(-1)
+        else:
+            raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
+
+        v_t = self.pretrained_model(t, pred_z_t, **model_kwargs)
+        # v_pred = self.lora_model(t, pred_z_t, **model_kwargs)
+        return v_t, t, target
 
   
 class ProgDistFlow(RectifiedFlow):
