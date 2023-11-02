@@ -36,17 +36,17 @@ export PYTHONFAULTHANDLER=1
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
 MODEL_TYPE=adm
-EPOCH_ID=500
+EPOCH_ID=75
 DATASET=celeba_256
-EXP=celeba_f8_adm_lr2e-5_40steps_ema0.95_fmloss
+EXP=celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher
 METHOD=euler
-STEPS=2
+STEPS=10
 USE_ORIGIN_ADM=True
 
 python test_consistent_flow.py --exp ${EXP} \
-        --dataset ${DATASET} --batch_size 50 --epoch_id ${EPOCH_ID} \
+        --dataset ${DATASET} --batch_size 16 --epoch_id ${EPOCH_ID} \
         --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-        --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
+        --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
         --use_origin_adm \
         --num_head_channels 64 \
         --master_port $MASTER_PORT --num_process_per_node 1 \
