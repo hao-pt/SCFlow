@@ -200,7 +200,7 @@ class ConsistencyFlow(RectifiedFlow):
         
         # local consistency
         t_bound = copy.deepcopy(t)
-        t_bound[t_bound >= 0.1] = 0.1
+        # t_bound[t_bound >= 0.3] = 0.3
         delta_t = (torch.rand_like(t)*t_bound).to(t.device)
         if self.pretrained_model is not None:
             with torch.no_grad():

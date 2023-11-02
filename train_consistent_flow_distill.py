@@ -283,7 +283,7 @@ def train(rank, gpu, args):
             con_loss = F.mse_loss(pred_z0, gt_z0)
 
             # loss = fm_loss + con_loss
-            loss = Gloss + fm_loss + con_loss
+            loss = Gloss + fm_loss + 0*con_loss
             loss.backward()
             optimizer.step()
 

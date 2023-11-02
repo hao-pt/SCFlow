@@ -22,13 +22,23 @@ import torch.optim as optim
 import torchvision
 import torch.distributed as dist
 from torch.multiprocessing import Process
-
 from datasets_prep import get_dataset
-from models import create_network
-from EMA import EMA
+from models import create_network, create_discriminator
+from EMA import EMA, EMAMODEL
 
 from models.augment import AugmentPipe
 
+
+def grad_penalty_call(args, D_real, x_t):
+    grad_real = torch.autograd.grad(
+        outputs=D_real.sum(), inputs=x_t, create_graph=True
+    )[0]
+    grad_penalty = (
+        grad_real.view(grad_real.size(0), -1).norm(2, dim=1) ** 2
+    ).mean()
+
+    grad_penalty = args.r1_gamma / 2 * grad_penalty
+    return grad_penalty
 
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
@@ -44,10 +54,31 @@ def broadcast_params(params):
         dist.broadcast(param.data, src=0)
 
 
-def sample_from_model(model, x_0):
-    t = torch.tensor([1., 0.], dtype=x_0.dtype, device="cuda")
-    fake_image = odeint(model, x_0, t, atol=1e-5, rtol=1e-5, adjoint_params=model.func.parameters())
-    return fake_image
+def sample_from_model(model, noise, Ns):
+    Ns = torch.tensor(Ns)
+    dts = 1./Ns
+    
+    trajs = []
+    x0hat_lists = []
+    
+    for i in range(Ns.size(0)):
+        traj = []
+        x0hat_list = []
+        z = noise.detach().clone()
+        traj.append(z.detach().clone())
+        N = Ns[i]
+        dt = dts[i]
+        for i in range(N, 0, -1):
+            t = torch.ones((z.size(0), 1), device=noise.device)*i/N
+            vt = model(t.squeeze(), z)
+            x0hat = z - vt * t.view(-1,1,1,1)
+            x0hat_list.append(x0hat)
+            z = z.detach().clone() - vt * dt
+            traj.append(z.detach().clone())
+        trajs.append(traj)
+        x0hat_lists.append(x0hat_list)
+        
+    return trajs, x0hat_lists
 
 
 
@@ -113,22 +144,29 @@ def train(rank, gpu, args):
     first_stage_model.train = False
     for param in first_stage_model.parameters():
         param.requires_grad = False
-
-    logger.info('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
-    logger.info('FM size: {:.3f}MB'.format(get_weight(model)))
+        
+    if rank == 0:
+        logger.info('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
+        logger.info('FM size: {:.3f}MB'.format(get_weight(model)))
+        
+    modelD = create_discriminator(args).to(device, dtype=dtype)
 
     broadcast_params(model.parameters())
+    broadcast_params(modelD.parameters())
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.0)
-
+    optimizerD = optim.AdamW(modelD.parameters(), lr=args.lrD, weight_decay=0.0)
+    
     if args.use_ema:
         optimizer = EMA(optimizer, ema_decay=args.ema_decay)
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epoch, eta_min=1e-5)
-
+    schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerD, args.num_epoch, eta_min=1e-5)
     #ddp
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=False)
-
+    model.train()  # important! This enables embedding dropout for classifier-free guidance
+    modelD = nn.parallel.DistributedDataParallel(modelD, device_ids=[gpu], find_unused_parameters=True)
+    modelD.train()
 
     if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
@@ -140,22 +178,25 @@ def train(rank, gpu, args):
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
         global_step = checkpoint["global_step"]
+        # load D
+        modelD.load_state_dict(checkpoint['modelD_dict'])
+        optimizerD.load_state_dict(checkpoint['optimizerD'])
+        schedulerD.load_state_dict(checkpoint['schedulerD'])
 
         logger.info("=> resume checkpoint (epoch {})"
                   .format(checkpoint['epoch']))
         del checkpoint
+    # elif args.model_ckpt and os.path.exists(os.path.join(exp_path, args.model_ckpt)):
+    #     checkpoint_file = os.path.join(exp_path, args.model_ckpt)
+    #     checkpoint = torch.load(checkpoint_file, map_location=device)
+    #     epoch = int(args.model_ckpt.split("_")[-1][:-4])
+    #     init_epoch = epoch
+    #     model.load_state_dict(checkpoint)
+    #     global_step = 0
 
-    elif args.model_ckpt and os.path.exists(os.path.join(exp_path, args.model_ckpt)):
-        checkpoint_file = os.path.join(exp_path, args.model_ckpt)
-        checkpoint = torch.load(checkpoint_file, map_location=device)
-        epoch = int(args.model_ckpt.split("_")[-1][:-4])
-        init_epoch = epoch
-        model.load_state_dict(checkpoint)
-        global_step = 0
-
-        logger.info("=> loaded checkpoint (epoch {})"
-                  .format(epoch))
-        del checkpoint
+    #     logger.info("=> loaded checkpoint (epoch {})"
+    #               .format(epoch))
+    #     del checkpoint
     else:
         global_step, epoch, init_epoch = 0, 0, 0
 
@@ -169,53 +210,81 @@ def train(rank, gpu, args):
             x_0 = x.to(device, dtype=dtype, non_blocking=True)
             y = None if not use_label else y.to(device, non_blocking=True)
             x_0, augment_labels = augment_pipe(x_0) if augment_pipe is not None else (x_0, None)
-            model.zero_grad()
             if is_latent_data:
                 z_0 = x_0 * args.scale_factor
             else:
                 z_0 = first_stage_model.encode(x_0).latent_dist.sample().mul_(args.scale_factor)
-            #sample t
-            if args.discrete:
-                t = torch.randint(1,1001,(z_0.shape[0],)).to(z_0.device).float()/1000
-            else:
-                t = torch.rand((z_0.size(0),), dtype=dtype, device=device)
-                t = t * (1 - 1e-5) + 1e-5
             
+            z_0.requires_grad = True
+            z_1 = torch.randn_like(z_0)
+            
+            # sample t
+            t = torch.rand((z_0.size(0),), dtype=dtype, device=device)            
             t = t.view(-1, 1, 1, 1)
             z_1 = torch.randn_like(z_0)
-            # corrected notation: 1 is real noise, 0 is real data
-            # z_t = (1 - t) * z_0 + (1e-5 + (1 - 1e-5) * t) * z_1
-            # u = (1 - 1e-5) * z_1 - z_0
             z_t = (1 - t) * z_0 + t * z_1
-            u = z_1 - z_0
+            # u = z_1 - z_0
             v = model(t.squeeze(), z_t, y, augment_labels)
-            loss = F.mse_loss(v, u)
+            pred_z_0 = z_t - t*v
+                        
+            for p in modelD.parameters():
+                p.requires_grad = True
+            modelD.zero_grad()
+            Dreal = modelD(z_0, c=y)
+            Dreal_loss = F.softplus(-Dreal).mean()
+            
+            grad_real = 0.
+            if args.lazy_reg is None:
+                grad_real = grad_penalty_call(args, Dreal, z_0)
+            else:
+                if global_step % args.lazy_reg == 0:
+                    grad_real = grad_penalty_call(args, Dreal, z_0)
+            
+            Dfake = modelD(pred_z_0, c=y)
+            Dfake_loss = F.softplus(Dfake).mean()
+            Dloss = Dreal_loss + grad_real + Dfake_loss
+            Dloss.backward(retain_graph=True)
+            optimizerD.step()
+            
+            
+            for p in modelD.parameters():
+                p.requires_grad = False
+            model.zero_grad()
+            v = model(t.squeeze(), z_t, y, augment_labels)
+            pred_z_0 = z_t - t*v
+            out = modelD(pred_z_0, c=y)
+            Gloss = F.softplus(-out).mean()
+            loss = 0.5*Gloss + F.mse_loss(z_0, pred_z_0)
             loss.backward()
             optimizer.step()
+            
             global_step += 1
             if iteration % 100 == 0:
                 if rank == 0:
                     end_time = time()
                     steps_per_sec = 100 / (end_time - start_time)
-                    logger.info('epoch {} iteration{}, Loss: {}, Train Steps/Sec: {:.2f}'.format(epoch, iteration, loss.item(), steps_per_sec))
+                    logger.info('epoch {} iteration{}, Loss: {}, LossG: {}, LossD: {}, Train Steps/Sec: {:.2f}'.format(epoch, iteration, loss.item(), Gloss.item(), Dloss.item(), steps_per_sec))
                     start_time = time()
+            
 
         if not args.no_lr_decay:
             scheduler.step()
+            schedulerD.step()
 
         if rank == 0:
             if epoch % args.plot_every == 0:
-
+                Ns = [1, 2, 5, 10, 25, 50, 100]
                 with torch.no_grad():
                     rand = torch.randn_like(z_0)[:4]
                     if y is not None:
                         y = y[:4]
                     sample_model = partial(model, y=y)
-                    # sample_func = lambda t, x: model(t, x, y=y)
-                    fake_sample = sample_from_model(sample_model, rand)[-1]
-                    fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
-                # torchvision.utils.save_image(fake_sample, os.path.join(exp_path, 'sample_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
-                torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
+                    trajs, x0hat_lists = sample_from_model(sample_model, rand, Ns)
+                    for i in range(len(Ns)):
+                        N = Ns[i]
+                        fake_image = trajs[i][-1]
+                        fake_image = first_stage_model.decode(fake_image / args.scale_factor).sample
+                        torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}_{}.png'.format(epoch, N)), normalize=True, nrow=4)
                 logger.info("Finish sampling")
 
             if args.save_content:
@@ -223,15 +292,17 @@ def train(rank, gpu, args):
                     logger.info('Saving content.')
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
-                               'scheduler': scheduler.state_dict()}
-
+                               'scheduler': scheduler.state_dict(),
+                               'modelD_dict': modelD.state_dict(), 'optimizerD': optimizerD.state_dict(),
+                               'schedulerD': schedulerD.state_dict()
+                               }
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
+                torch.save(model.state_dict(), os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
                 if args.use_ema:
                     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-
-                torch.save(model.state_dict(), os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
+                torch.save(model.state_dict(), os.path.join(exp_path, 'model_ema_{}.pth'.format(epoch)))
                 if args.use_ema:
                     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
@@ -312,6 +383,17 @@ if __name__ == '__main__':
 
     parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="stabilityai/sd-vae-ft-mse")
 
+    # discriminator
+    parser.add_argument('--lrD', type=float, default=1e-4, help='learning rate d')
+    parser.add_argument('--d_base_channels', type=int, default=32768,
+                            help='number of discriminator base channels')
+    parser.add_argument('--r1_gamma', type=float,
+                        default=0.05, help='coef for r1 reg')
+    parser.add_argument('--lazy_reg', type=int, default=None,
+                        help='lazy regulariation.')
+    parser.add_argument('--d_temb_channels', type=int, default=None,
+                        help='number of discriminator temb channels')
+    
     # training
     parser.add_argument('--exp', default='experiment_cifar_default', help='name of experiment')
     parser.add_argument('--dataset', default='cifar10', help='name of dataset')
@@ -340,9 +422,9 @@ if __name__ == '__main__':
 
 
     parser.add_argument('--save_content', action='store_true', default=False)
-    parser.add_argument('--save_content_every', type=int, default=10, help='save content for resuming every x epochs')
+    parser.add_argument('--save_content_every', type=int, default=5, help='save content for resuming every x epochs')
     parser.add_argument('--save_ckpt_every', type=int, default=25, help='save ckpt every x epochs')
-    parser.add_argument('--plot_every', type=int, default=5, help='plot every x epochs')
+    parser.add_argument('--plot_every', type=int, default=1, help='plot every x epochs')
 
     ###ddp
     parser.add_argument('--num_proc_node', type=int, default=1,
