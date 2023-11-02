@@ -92,6 +92,7 @@ def get_dataset(args):
                               train=True, transform=train_transform)
     return dataset
 
+
 def get_inpainting_dataset(args):
     from datasets_prep.inpaint_preprocess.mask import get_mask_generator
     transform = transforms.Compose([

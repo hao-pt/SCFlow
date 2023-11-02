@@ -22,7 +22,6 @@ class LatentDataset(data.Dataset):
         sample = np.load(self.data[index]).item()
         target = torch.from_numpy(sample["label"])
         x = torch.from_numpy(sample["input"])
-
         if self.transform is not None:
             x = self.transform(x)
 

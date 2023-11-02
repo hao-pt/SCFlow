@@ -31,13 +31,28 @@ class LMDBDataset(data.Dataset):
             lmdb_path = os.path.join(root, 'train.lmdb')
         else:
             lmdb_path = os.path.join(root, 'validation.lmdb')
-        self.data_lmdb = lmdb.open(lmdb_path, readonly=True, max_readers=1,
-                                   lock=False, readahead=False, meminit=False)
+        self.lmdb_path = lmdb_path
+        # self.env = lmdb.open(lmdb_path, readonly=True, max_readers=1,
+        #                            lock=False, readahead=False, meminit=False)
         self.is_encoded = is_encoded
+
+        # compute size
+        self.open_lmdb()
+        with self.env.begin() as txn:
+            self.size = txn.stat()['entries']
+        self.env.close()
+        del self.env
+    
+    def open_lmdb(self):
+        self.env = lmdb.open(self.lmdb_path, readonly=True, max_readers=1,
+                                   lock=False, readahead=False, meminit=False)
+        # self.txn = self.env.begin(write=False, buffers=True)
 
     def __getitem__(self, index):
         target = [0]
-        with self.data_lmdb.begin(write=False, buffers=True) as txn:
+        if not hasattr(self, 'env'):
+            self.open_lmdb()
+        with self.env.begin(write=False, buffers=True) as txn:
             data = txn.get(str(index).encode())
             if self.is_encoded:
                 img = Image.open(io.BytesIO(data))
@@ -55,6 +70,4 @@ class LMDBDataset(data.Dataset):
         return img, target
 
     def __len__(self):
-        with self.data_lmdb.begin() as txn:
-            length = txn.stat()['entries']
-        return length
+        return self.size

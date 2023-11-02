@@ -45,26 +45,27 @@ USE_ORIGIN_ADM=True
 
 if [[ ${USE_ORIGIN_ADM} == True ]]; then
     python test_flow_latent.py --exp ${EXP} \
-        --dataset ${DATASET} --batch_size 100 --epoch_id ${EPOCH_ID} \
+        --dataset ${DATASET} --batch_size 50 --epoch_id ${EPOCH_ID} \
         --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
         --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
         --use_origin_adm \
+        --num_head_channels 64 \
         --master_port $MASTER_PORT --num_process_per_node 1 \
-        --method dopri5 --num_steps 0 \
-        # --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
-        # --measure_time \
+        --method ${METHOD} --num_steps ${STEPS} \
+        --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
         # --use_karras_samplers \
-        # --method heun --step_size 50 \
+        # --measure_time \
         # --compute_nfe \
 
 else
     python test_flow_latent.py --exp ${EXP} \
-        --dataset ${DATASET} --batch_size 100 --epoch_id ${EPOCH_ID} \
+        --dataset ${DATASET} --batch_size 54 --epoch_id ${EPOCH_ID} \
         --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
         --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
         --master_port $MASTER_PORT --num_process_per_node 1 \
-        --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
         --method dopri5 --num_steps 0 \
+        --model_type ${MODEL_TYPE} --num_classes 1 --label_dropout 0. \
+        # --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
         # --measure_time \
         # --use_karras_samplers \
         # --method heun --step_size 50 \

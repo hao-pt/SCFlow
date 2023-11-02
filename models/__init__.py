@@ -1,6 +1,7 @@
 from .EDM import get_edm_network
 from .DiT import DiT_models
 from .guided_diffusion.unet import UNetModel# , UNetModelAttn
+from .discriminator import Discriminator
 
 def create_network(config):
     if config.use_origin_adm:
@@ -14,6 +15,14 @@ def create_network(config):
         label_dropout=config.label_dropout,
         num_classes=config.num_classes
     )
+
+def create_discriminator(config):
+    kwargs = dict(c_dim=0, img_resolution=config.image_size//config.f, 
+        img_channels=config.num_in_channels, channel_base=config.d_base_channels,
+        temb_dim=config.d_temb_channels)
+    model = Discriminator(**kwargs)
+    return model
+
 
 
 def get_flow_model(config):
@@ -62,6 +71,7 @@ def get_flow_model(config):
                         num_heads_upsample=config.num_head_upsample,
                         use_scale_shift_norm=config.use_scale_shift_norm,
                         resblock_updown=config.resblock_updown,
-                        use_new_attention_order=config.use_new_attention_order)
+                        use_new_attention_order=config.use_new_attention_order,
+                        augment_dim=config.augment_dim)
 
     return model

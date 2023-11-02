@@ -202,6 +202,7 @@ def sample_and_test(rank, gpu, args):
 
     device = torch.device('cuda:{}'.format(gpu))
 >>>>>>> origin/hao_dev
+>>>>>>> be09ffe39dc9027751d6ba6da84a05ada4eb986c
     
     if args.dataset == 'cifar10':
         real_img_dir = 'pytorch_fid/cifar10_train_stat.npy'
@@ -224,7 +225,6 @@ def sample_and_test(rank, gpu, args):
         **args_to_dict(args, classifier_defaults().keys())
     ).to(device)
     # classifier_ckpt = torch.load('./saved_info/classifier_guidance//{}/{}'.format(args.dataset, args.classifier_ckpt), map_location=device)
-    
     classifier_ckpt = torch.load(args.classifier_ckpt, map_location=device)
     print("Finish loading classifier")
     #loading weights from ddp in single gpu
@@ -239,7 +239,6 @@ def sample_and_test(rank, gpu, args):
         ckpt[key[7:]] = ckpt.pop(key)
     model.load_state_dict(ckpt)
     model.eval()
-
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device)
         
     iters_needed = args.n_sample //args.batch_size
@@ -386,7 +385,6 @@ if __name__ == '__main__':
     parser.add_argument('--num_in_channels', type=int, default=4,
                             help='in channel image')
     parser.add_argument('--num_out_channels', type=int, default=4,
->>>>>>> origin/hao_dev
                             help='in channel image')
     parser.add_argument('--nf', type=int, default=256,
                             help='channel of image')
@@ -488,4 +486,3 @@ if __name__ == '__main__':
         print('starting in debug mode')
         
         init_processes(0, size, sample_and_test, args)
->>>>>>> origin/hao_dev
