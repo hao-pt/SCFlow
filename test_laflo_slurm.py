@@ -17,11 +17,11 @@ slurm_template = """#!/bin/bash -e
 #SBATCH --mail-user=v.haopt12@vinai.io
 #SBATCH --ntasks=1
 
-module purge
-module load python/miniconda3/miniconda3
-eval "$(conda shell.bash hook)"
-conda activate /lustre/scratch/client/vinai/users/ngocbh8/quan/envs/flow
-cd /lustre/scratch/client/vinai/users/ngocbh8/quan/cnf_flow
+# module purge
+# module load python/miniconda3/miniconda3
+# eval "$(conda shell.bash hook)"
+# conda activate /lustre/scratch/client/vinai/users/ngocbh8/quan/envs/flow
+# cd /lustre/scratch/client/vinai/users/ngocbh8/quan/cnf_flow
 
 export MASTER_PORT={master_port}
 export WORLD_SIZE=1
@@ -44,28 +44,28 @@ echo "----------------------------"
 CUDA_VISIBLE_DEVICES={device} python test_flow_latent.py --exp $EXP \
     --dataset $DATASET --batch_size 100 --epoch_id $EPOCH_ID \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-    --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 --num_res_blocks 2 \
+    --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
     --model_type $MODEL_TYPE \
     --method {method} --num_steps {num_steps} \
     --compute_fid --output_log $OUTPUT_LOG \
     --master_port $MASTER_PORT  --num_process_per_node {num_gpus} \
-    --num_classes 1 --label_dropout 0. \
+    --use_origin_adm \
     # --use_karras_samplers \
-    # --use_origin_adm \
+    # --num_classes 1 --label_dropout 0. \
 
 
 """
 
 ###### ARGS
-model_type = "DiT-L/2" # or "DiT-L/2" or "adm"
-dataset = "lsun_church"
-exp = "laflo_church_f8_dit"
+model_type = "adm" # or "DiT-L/2" or "adm"
+dataset = "ffhq_256"
+exp = "ffhq_f8_lr2e-5_adm"
 BASE_PORT = 8014
-num_gpus = 2
-device = "0,1"#,2,3,4,5,6,7"
+num_gpus = 1
+device = "0" #,2,3,4,5,6,7"
 
 config = pd.DataFrame({
-    "epochs": [675],
+    "epochs": [425],
     "num_steps": [0],
     "methods": ['dopri5'],
     "cfg_scale": [1],
@@ -73,8 +73,8 @@ config = pd.DataFrame({
 print(config)
 
 ###################################
-slurm_file_path = f"/lustre/scratch/client/vinai/users/ngocbh8/quan/cnf_flow/slurm_scripts/{exp}/run.sh"
-slurm_output = f"/lustre/scratch/client/vinai/users/ngocbh8/quan/cnf_flow/slurm_scripts/{exp}/"
+slurm_file_path = f"/lustre/scratch/client/vinai/users/quandm7/hao_workspace/cnf_flow/slurm_scripts/{exp}/run.sh"
+slurm_output = f"/lustre/scratch/client/vinai/users/quandm7/hao_workspace/cnf_flow/slurm_scripts/{exp}/"
 output_log = f"{slurm_output}/log"
 os.makedirs(slurm_output, exist_ok=True)
 job_name = "test"
