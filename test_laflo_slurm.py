@@ -63,10 +63,10 @@ dataset = "ffhq_256"
 exp = "ffhq_f8_lr2e-5_adm"
 BASE_PORT = 8014
 num_gpus = 1
-device = "0"#,2,3,4,5,6,7"
+device = "0" #,2,3,4,5,6,7"
 
 config = pd.DataFrame({
-    "epochs": [425],
+    "epochs": [475],
     "num_steps": [0],
     "methods": ['dopri5'],
     "cfg_scale": [1],

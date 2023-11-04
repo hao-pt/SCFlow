@@ -26,6 +26,8 @@ from ddp_utils import init_processes
 from sampler.karras_sample import karras_sample
 from sampler.random_util import get_generator
 
+from distill.flows import BaseFlow
+
 ADAPTIVE_SOLVER = ["dopri5", "dopri8", "adaptive_heun", "bosh3"]
 FIXER_SOLVER = ["euler", "rk4", "midpoint", "stochastic"]
 
@@ -159,6 +161,8 @@ def sample_and_test(rank, gpu, args):
     #### as the same seed can cause identical generation on other gpus
     generator = get_generator(args.generator, args.n_sample, seed)
 
+    flow = BaseFlow(device, model=model, num_steps=args.num_steps)
+
     def run_sampling(num_samples, generator, cls_index=None):
         x = generator.randn(num_samples, 4, args.image_size//8, args.image_size//8).to(device)
         if args.num_classes in [None, 1]:
@@ -179,10 +183,11 @@ def sample_and_test(rank, gpu, args):
             else:
                 model_kwargs = dict(y=y)
 
-        if not args.use_karras_samplers:
-            fake_sample = sample_from_model(model, x, model_kwargs, args)[-1]
-        else:
-            fake_sample = sample_from_model2(model, x, model_kwargs, generator, args)
+        # if not args.use_karras_samplers:
+        #     fake_sample = sample_from_model(model, x, model_kwargs, args)[-1]
+        # else:
+        #     fake_sample = sample_from_model2(model, x, model_kwargs, generator, args)
+        fake_sample = flow.sample_ode_generative(x, model_kwargs=model_kwargs)[0][-1]
 
         if args.cfg_scale > 1.:
             fake_sample, _ = fake_sample.chunk(2, dim=0)  # Remove null class samples
