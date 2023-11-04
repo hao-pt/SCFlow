@@ -187,7 +187,8 @@ def sample_and_test(rank, gpu, args):
         #     fake_sample = sample_from_model(model, x, model_kwargs, args)[-1]
         # else:
         #     fake_sample = sample_from_model2(model, x, model_kwargs, generator, args)
-        fake_sample = flow.sample_ode_generative(x, model_kwargs=model_kwargs)[0][-1]
+        fake_sample = flow.sample_ode_generative_stochastic(x, model_kwargs=model_kwargs)[0][-1]
+        # fake_sample = flow.sample_ode_generative(x, model_kwargs=model_kwargs)[0][-1]
 
         if args.cfg_scale > 1.:
             fake_sample, _ = fake_sample.chunk(2, dim=0)  # Remove null class samples

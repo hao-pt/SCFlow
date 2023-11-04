@@ -7,99 +7,138 @@ import functools
 import numpy as np
 
 class BaseFlow():
-	def __init__(self, device, model=None, ema_model=None, num_steps=1000):
-		self.model = model
-		self.ema_model = ema_model
-		self.N = num_steps
-		self.device = device
+  def __init__(self, device, model=None, ema_model=None, num_steps=1000):
+    self.model = model
+    self.ema_model = ema_model
+    self.N = num_steps
+    self.device = device
 
-	def get_train_tuple(self, z0=None, z1=None):
-		# return z_t, t, target
-		raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
+  def get_train_tuple(self, z0=None, z1=None):
+    # return z_t, t, target
+    raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
 
-	@torch.no_grad()
-	def sample_ode(self, z0=None, N=None):
-		### NOTE: Use Euler method to sample from the learned flow
-		if N is None:
-			N = self.N    
-		dt = 1./N
-		traj = [] # to store the trajectory
-		z = z0.detach().clone()
-		batchsize = z.shape[0]
-		
-		traj.append(z.detach().clone())
-		for i in range(N):
-			t = torch.ones((batchsize,1), device=self.device) * i / N
-			if len(z0.shape) == 2:
-				pred = self.model(t, z)
-			elif len(z0.shape) == 4:
-				pred = self.model(t.squeeze(), z)
-			z = z.detach().clone() + pred * dt
-			traj.append(z.detach().clone())
-		return traj
-
-	@torch.no_grad()
-	def sample_ode_generative(self, z1=None, N=None, use_tqdm=True, solver = 'euler', model_kwargs={}):
-		assert solver in ['euler', 'heun']
-		tq = tqdm if use_tqdm else lambda x: x
-		if N is None:
-			N = self.N    
-		if solver == 'heun' and N % 2 == 0:
-			raise ValueError("N must be odd when using Heun's method.")
-		if solver == 'heun':
-			N = (N + 1) // 2
-		dt = -1./N
+  @torch.no_grad()
+  def sample_ode(self, z0=None, N=None):
+    ### NOTE: Use Euler method to sample from the learned flow
+    if N is None:
+      N = self.N    
+    dt = 1./N
+    traj = [] # to store the trajectory
+    z = z0.detach().clone()
+    batchsize = z.shape[0]
     
-		traj = [] # to store the trajectory
-		x0hat_list = []
-		z = z1.detach().clone()
-		batchsize = z.shape[0]
-		traj.append(z.detach().clone())
+    traj.append(z.detach().clone())
+    for i in range(N):
+      t = torch.ones((batchsize,1), device=self.device) * i / N
+      if len(z0.shape) == 2:
+        pred = self.model(t, z)
+      elif len(z0.shape) == 4:
+        pred = self.model(t.squeeze(), z)
+      z = z.detach().clone() + pred * dt
+      traj.append(z.detach().clone())
+    return traj
+
+  @torch.no_grad()
+  def sample_ode_generative(self, z1=None, N=None, use_tqdm=True, solver = 'euler', model_kwargs={}):
+    assert solver in ['euler', 'heun']
+    tq = tqdm if use_tqdm else lambda x: x
+    if N is None:
+      N = self.N    
+    if solver == 'heun' and N % 2 == 0:
+      raise ValueError("N must be odd when using Heun's method.")
+    if solver == 'heun':
+      N = (N + 1) // 2
+    dt = -1./N
     
-		for i in tq(reversed(range(1,N+1))):
+    traj = [] # to store the trajectory
+    x0hat_list = []
+    z = z1.detach().clone()
+    batchsize = z.shape[0]
+    traj.append(z.detach().clone())
+    
+    for i in tq(reversed(range(1,N+1))):
       
-			t = torch.ones((batchsize,1), device=self.device) * i / N
-			t_next = torch.ones((batchsize,1), device=self.device) * (i-1) / N
-			if len(z1.shape) == 2:
-				if solver == 'heun':
-					raise NotImplementedError("Heun's method not implemented for 2D data.")
-				vt = self.model(t, z, **model_kwargs)
-			elif len(z1.shape) == 4:
-				vt = self.model(t.squeeze(), z, **model_kwargs)
-				if solver == 'heun' and i > 1:
-					z_next = z.detach().clone() + vt * dt
-					vt_next = self.model(t_next.squeeze(), z_next, **model_kwargs)
-					vt = (vt + vt_next) / 2
-				x0hat = z - vt * t.view(-1,1,1,1)
-				x0hat_list.append(x0hat)
-			
-			z = z.detach().clone() + vt * dt
-			traj.append(z.detach().clone())
+      t = torch.ones((batchsize,1), device=self.device) * i / N
+      t_next = torch.ones((batchsize,1), device=self.device) * (i-1) / N
+      if len(z1.shape) == 2:
+        if solver == 'heun':
+          raise NotImplementedError("Heun's method not implemented for 2D data.")
+        vt = self.model(t, z, **model_kwargs)
+      elif len(z1.shape) == 4:
+        vt = self.model(t.squeeze(), z, **model_kwargs)
+        if solver == 'heun' and i > 1:
+          z_next = z.detach().clone() + vt * dt
+          vt_next = self.model(t_next.squeeze(), z_next, **model_kwargs)
+          vt = (vt + vt_next) / 2
+        x0hat = z - vt * t.view(-1,1,1,1)
+        x0hat_list.append(x0hat)
+      
+      z = z.detach().clone() + vt * dt
+      traj.append(z.detach().clone())
 
-		return traj, x0hat_list
+    return traj, x0hat_list
 
-  
-	def sample_ode_generative_bbox(self, z1=None, N=None, use_tqdm=True, solver = 'RK45', eps = 1e-3, rtol=1e-5, atol=1e-5,if_pred_x0=False):
-		dshape = z1.shape
-		device = z1.device
-		def ode_func(t, x):
-			x = torch.from_numpy(x.reshape(dshape)).to(device).type(torch.float32)
-			vec_t = torch.ones(dshape[0], device=x.device) * t
-			if if_pred_x0:
-				vt = z1 - self.model(vec_t, x)
-			else:
-				vt = self.model(vec_t, x)
-			vt = vt.detach().cpu().numpy().reshape(-1)
-			return vt
-		solution = integrate.solve_ivp(ode_func, (1, eps), z1.detach().cpu().numpy().reshape(-1), method=solver, rtol = rtol, atol = atol)
-		nfe = solution.nfev
-		result = torch.from_numpy(solution.y[:,-1].reshape(dshape))
-		return result, nfe
 
-	def encode(self, z0, N=None):
-		traj = self.sample_ode(z0, N)
-		z1 = traj[-1]
-		return z1, 0, 0
+  @torch.no_grad()
+  def sample_ode_generative_stochastic(self, z1=None, N=None, use_tqdm=True, solver = 'euler', model_kwargs={}):
+    assert solver in ['euler', 'heun']
+    tq = tqdm if use_tqdm else lambda x: x
+    if N is None:
+      N = self.N    
+    if solver == 'heun' and N % 2 == 0:
+      raise ValueError("N must be odd when using Heun's method.")
+    if solver == 'heun':
+      N = (N + 1) // 2
+    dt = -1./N
+
+    traj = [] # to store the trajectory
+    x0hat_list = []
+    z = z1.detach().clone()
+    batchsize = z.shape[0]
+    traj.append(z.detach().clone())
+
+    for i in tq(reversed(range(1,N+1))):
+      t = torch.ones((batchsize,1), device=self.device) * i / N
+      t_next = torch.ones((batchsize,1), device=self.device) * (i-1) / N
+      if len(z1.shape) == 2:
+        if solver == 'heun':
+          raise NotImplementedError("Heun's method not implemented for 2D data.")
+        vt = self.model(t, z, **model_kwargs)
+      elif len(z1.shape) == 4:
+        vt = self.model(t.squeeze(), z, **model_kwargs)
+        if solver == 'heun' and i > 1:
+          z_next = z.detach().clone() + vt * dt
+          vt_next = self.model(t_next.squeeze(), z_next, **model_kwargs)
+          vt = (vt + vt_next) / 2
+        x0hat = z - vt * t.view(-1,1,1,1)
+        x0hat_list.append(x0hat)
+      z = x0hat.detach().clone() * (1. - t_next.view(-1,1,1,1)) + t_next.view(-1,1,1,1) * torch.randn_like(z)
+      traj.append(z.detach().clone())
+
+    return traj, x0hat_list
+
+
+  def sample_ode_generative_bbox(self, z1=None, N=None, use_tqdm=True, solver = 'RK45', eps = 1e-3, rtol=1e-5, atol=1e-5,if_pred_x0=False):
+    dshape = z1.shape
+    device = z1.device
+    def ode_func(t, x):
+      x = torch.from_numpy(x.reshape(dshape)).to(device).type(torch.float32)
+      vec_t = torch.ones(dshape[0], device=x.device) * t
+      if if_pred_x0:
+        vt = z1 - self.model(vec_t, x)
+      else:
+        vt = self.model(vec_t, x)
+      vt = vt.detach().cpu().numpy().reshape(-1)
+      return vt
+    solution = integrate.solve_ivp(ode_func, (1, eps), z1.detach().cpu().numpy().reshape(-1), method=solver, rtol = rtol, atol = atol)
+    nfe = solution.nfev
+    result = torch.from_numpy(solution.y[:,-1].reshape(dshape))
+    return result, nfe
+
+  def encode(self, z0, N=None):
+    traj = self.sample_ode(z0, N)
+    z1 = traj[-1]
+    return z1, 0, 0
 
 class RectifiedFlow(BaseFlow):
     def __init__(self, discrete=False, **kwargs):
