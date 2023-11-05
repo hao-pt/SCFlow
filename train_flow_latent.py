@@ -71,6 +71,7 @@ def sample_from_model(model, noise, Ns):
         for i in range(N, 0, -1):
             t = torch.ones((z.size(0), 1), device=noise.device)*i/N
             vt = model(t.squeeze(), z)
+            
             x0hat = z - vt * t.view(-1,1,1,1)
             x0hat_list.append(x0hat)
             z = z.detach().clone() - vt * dt
@@ -254,7 +255,7 @@ def train(rank, gpu, args):
             pred_z_0 = z_t - t*v
             out = modelD(pred_z_0, c=y)
             Gloss = F.softplus(-out).mean()
-            loss = 0.5*Gloss + F.mse_loss(z_0, pred_z_0)
+            loss = Gloss + F.mse_loss(z_0, pred_z_0)
             loss.backward()
             optimizer.step()
             
