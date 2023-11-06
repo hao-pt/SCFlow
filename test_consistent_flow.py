@@ -187,8 +187,10 @@ def sample_and_test(rank, gpu, args):
         #     fake_sample = sample_from_model(model, x, model_kwargs, args)[-1]
         # else:
         #     fake_sample = sample_from_model2(model, x, model_kwargs, generator, args)
-        fake_sample = flow.sample_ode_generative_stochastic(x, model_kwargs=model_kwargs)[0][-1]
-        # fake_sample = flow.sample_ode_generative(x, model_kwargs=model_kwargs)[0][-1]
+        if args.stochastic:
+            fake_sample = flow.sample_ode_generative_stochastic(x, model_kwargs=model_kwargs)[0][-1]
+        else:
+            fake_sample = flow.sample_ode_generative(x, model_kwargs=model_kwargs)[0][-1]
 
         if args.cfg_scale > 1.:
             fake_sample, _ = fake_sample.chunk(2, dim=0)  # Remove null class samples
@@ -406,6 +408,7 @@ if __name__ == '__main__':
         "euler", "midpoint", "rk4", "heun", "multistep", "stochastic", "dpm"])
     parser.add_argument('--step_size', type=float, default=0.01, help='step_size')
     parser.add_argument('--perturb', action='store_true', default=False)
+    parser.add_argument('--stochastic', action='store_true', default=False)
 
     ###ddp
     parser.add_argument('--num_proc_node', type=int, default=1,
@@ -426,6 +429,10 @@ if __name__ == '__main__':
     size = args.num_process_per_node
 
     if size > 1 and args.compute_fid:
+        try:
+            torch.multiprocessing.set_start_method('spawn')
+        except RuntimeError:
+            pass
         processes = []
         for rank in range(size):
             args.local_rank = rank

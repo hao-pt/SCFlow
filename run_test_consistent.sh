@@ -17,7 +17,7 @@
 set -x
 set -e
 
-export MASTER_PORT=13001
+export MASTER_PORT=13003
 export WORLD_SIZE=1
 
 export SLURM_JOB_NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ' ')
@@ -36,15 +36,15 @@ export PYTHONFAULTHANDLER=1
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
 MODEL_TYPE=adm
-EPOCH_ID=75
+EPOCH_ID=200
 DATASET=celeba_256
-EXP=celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher
+EXP=celeba_2_gpu_discrete_fix_ema_z0
 METHOD=euler
-STEPS=10
+STEPS=2
 USE_ORIGIN_ADM=True
 
 python test_consistent_flow.py --exp ${EXP} \
-        --dataset ${DATASET} --batch_size 16 --epoch_id ${EPOCH_ID} \
+        --dataset ${DATASET} --batch_size 20 --epoch_id ${EPOCH_ID} \
         --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
         --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
         --use_origin_adm \
@@ -52,6 +52,6 @@ python test_consistent_flow.py --exp ${EXP} \
         --master_port $MASTER_PORT --num_process_per_node 1 \
         --use_karras_samplers \
         --method ${METHOD} --num_steps ${STEPS} \
-        # --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
+        --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
         # --measure_time \
         # --compute_nfe \

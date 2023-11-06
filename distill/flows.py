@@ -106,6 +106,7 @@ class BaseFlow():
         vt = self.model(t, z, **model_kwargs)
       elif len(z1.shape) == 4:
         vt = self.model(t.squeeze(), z, **model_kwargs)
+        # vt = vt / (torch.linalg.norm(vt) + 1e-5)
         if solver == 'heun' and i > 1:
           z_next = z.detach().clone() + vt * dt
           vt_next = self.model(t_next.squeeze(), z_next, **model_kwargs)
