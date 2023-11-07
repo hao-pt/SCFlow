@@ -137,7 +137,8 @@ def sample_and_test(rank, gpu, args):
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device)
 
     # ckpt = torch.load('./saved_info/consistent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)["ema_model"]
-    ckpt = torch.load('./saved_info/cd_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    # ckpt = torch.load('./saved_info/cd_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
     print("Finish loading model")
     # loading weights from ddp in single gpu
     for key in list(ckpt.keys()):
@@ -152,6 +153,8 @@ def sample_and_test(rank, gpu, args):
     # save_dir = "./generated_samples/{}".format(args.dataset)
     if args.method in FIXER_SOLVER:
         save_dir += "_s{}".format(args.num_steps)
+    if args.stochastic:
+        save_dir += "_stochastic"
 
     if rank == 0 and not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -163,7 +166,7 @@ def sample_and_test(rank, gpu, args):
 
     flow = BaseFlow(device, model=model, num_steps=args.num_steps)
 
-    def run_sampling(num_samples, generator, cls_index=None):
+    def run_sampling(num_samples, generator, cls_index=None, return_traj=False):
         x = generator.randn(num_samples, 4, args.image_size//8, args.image_size//8).to(device)
         if args.num_classes in [None, 1]:
             model_kwargs = {}
@@ -187,13 +190,23 @@ def sample_and_test(rank, gpu, args):
         #     fake_sample = sample_from_model(model, x, model_kwargs, args)[-1]
         # else:
         #     fake_sample = sample_from_model2(model, x, model_kwargs, generator, args)
-        fake_sample = flow.sample_ode_generative_stochastic(x, model_kwargs=model_kwargs)[0][-1]
-        # fake_sample = flow.sample_ode_generative(x, model_kwargs=model_kwargs)[0][-1]
+        if args.stochastic:
+            traj, x0_list = flow.sample_ode_generative_stochastic(x, model_kwargs=model_kwargs, beta=args.beta)
+        else:
+            # traj, x0_list = flow.sample_ode_generative(x, model_kwargs=model_kwargs)
+            traj, x0_list = flow.sample_ode_generative_range(x, T=torch.cumsum(torch.tensor([0.1/10]*10 + [0.8/30]*30 + [0.1/10]*10, device=device), dim=0), model_kwargs=model_kwargs)
+        fake_sample = traj[-1]
 
         if args.cfg_scale > 1.:
             fake_sample, _ = fake_sample.chunk(2, dim=0)  # Remove null class samples
-
         fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
+
+        if return_traj:
+            traj = [first_stage_model.decode(x / args.scale_factor).sample for x in traj]
+            traj = torch.cat(traj, dim=0)
+            x0_list = [first_stage_model.decode(x / args.scale_factor).sample for x in x0_list]
+            x0_list = torch.cat(x0_list, dim=0)
+            return fake_image, traj, x0_list
         return fake_image
 
     if args.compute_nfe:
@@ -308,18 +321,22 @@ def sample_and_test(rank, gpu, args):
     else:
         print("Inference")
         with torch.no_grad():
-            fake_image = run_sampling(args.batch_size, generator)
+            fake_image, traj, x0_seq = run_sampling(args.batch_size, generator, return_traj=True)
         fake_image = torch.clamp(to_range_0_1(fake_image), 0, 1)
         if not args.use_karras_samplers:
-            save_path = './samples_{}_{}_{}_{}'.format(args.dataset, args.method, args.atol, args.rtol)
+            save_path = 'samples_{}_{}_{}_{}'.format(args.dataset, args.method, args.atol, args.rtol)
         else:
-            save_path = './samples_{}_{}_{}'.format(args.dataset, args.method, args.num_steps)
+            save_path = 'samples_{}_{}_{}'.format(args.dataset, args.method, args.num_steps)
         if args.num_classes:
             save_path += "_cls{}_cfg{}".format(cls_index, args.cfg_scale)
+        if args.stochastic:
+            save_path += "_stochastic"
         save_path += ".jpg"
 
-        torchvision.utils.save_image(fake_image, save_path, padding=0, nrow=3)
-        print("Samples are save at '{}".format(save_path))
+        torchvision.utils.save_image(fake_image, save_path, padding=0, nrow=4)
+        torchvision.utils.save_image(x0_seq, save_path.split(".")[0] + "_x0pred.jpg", normalize=True, nrow=4)
+        torchvision.utils.save_image(traj, save_path.split(".")[0] + "_traj.jpg", normalize=True, nrow=4)
+        print("Samples are saved at '{}".format(save_path))
 
 
 if __name__ == '__main__':
@@ -406,6 +423,8 @@ if __name__ == '__main__':
         "euler", "midpoint", "rk4", "heun", "multistep", "stochastic", "dpm"])
     parser.add_argument('--step_size', type=float, default=0.01, help='step_size')
     parser.add_argument('--perturb', action='store_true', default=False)
+    parser.add_argument('--stochastic', action='store_true', default=False)
+    parser.add_argument('--beta', type=float, default=0., help='the level of stochasticity')
 
     ###ddp
     parser.add_argument('--num_proc_node', type=int, default=1,
@@ -426,6 +445,10 @@ if __name__ == '__main__':
     size = args.num_process_per_node
 
     if size > 1 and args.compute_fid:
+        try:
+            torch.multiprocessing.set_start_method('spawn')
+        except RuntimeError:
+            pass
         processes = []
         for rank in range(size):
             args.local_rank = rank
