@@ -296,12 +296,18 @@ class ConsistencyFlow(RectifiedFlow):
             now_t = torch.clamp(t - delta_t, 0, 1)
         
         pred_vt = self.model(t, pre_zt, **model_kwargs)
+        # pre_zt = pre_zt - delta_t.view(-1, 1, 1, 1) * pred_vt
+        # with torch.no_grad():
+        #   pred_vt = self.ema_model(now_t, pre_zt, **model_kwargs)
+        # t = now_t
+
         gt_flow = z1 - z0
         with torch.no_grad():
           gt_vt = self.ema_model(now_t, now_zt, **model_kwargs).detach()
         if return_pred_z0:
           pred_z0 = pre_zt - t.view(-1, 1, 1, 1) * pred_vt
           gt_z0 = now_zt - now_t.view(-1, 1, 1, 1) * gt_vt
+          # gt_z0[now_t < 0.2] = z0[now_t < 0.2]
           return pred_vt, gt_vt, gt_flow, pred_z0, gt_z0
         return pred_vt, gt_vt, gt_flow
 

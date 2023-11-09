@@ -45,7 +45,7 @@ USE_ORIGIN_ADM=True
 
 if [[ ${USE_ORIGIN_ADM} == True ]]; then
     python test_flow_latent.py --exp ${EXP} \
-        --dataset ${DATASET} --batch_size 50 --epoch_id ${EPOCH_ID} \
+        --dataset ${DATASET} --batch_size 100 --epoch_id ${EPOCH_ID} \
         --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
         --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
         --use_origin_adm \
