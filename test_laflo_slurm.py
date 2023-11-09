@@ -62,14 +62,14 @@ model_type = "adm" # or "DiT-L/2" or "adm"
 dataset = "ffhq_256"
 exp = "ffhq_f8_lr2e-5_adm"
 BASE_PORT = 8014
-num_gpus = 1
-device = "0" #,2,3,4,5,6,7"
+num_gpus = 2
+device = "0,1" #,2,3,4,5,6,7"
 
 config = pd.DataFrame({
-    "epochs": [475],
-    "num_steps": [0],
-    "methods": ['dopri5'],
-    "cfg_scale": [1],
+    "epochs": [350, 325],
+    "num_steps": [0]*2,
+    "methods": ['dopri5']*2,
+    "cfg_scale": [1]*2,
 })
 print(config)
 

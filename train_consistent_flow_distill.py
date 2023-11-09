@@ -207,6 +207,8 @@ def train(rank, gpu, args):
         #     param.requires_grad = False
         teacher = copy.deepcopy(model)
         teacher.eval()
+    else:
+        teacher = None
 
     if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
@@ -249,6 +251,7 @@ def train(rank, gpu, args):
             z_0.requires_grad = True
             z_1 = torch.randn_like(z_0)
             model_kwargs = {"y": y}
+            gan_lamb = 0. if global_step < args.gan_warmup_iters else 1.
 
             z_t, t, gt_flow, pred_z0 = flow.get_train_tuple_flow(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
             for p in modelD.parameters():
@@ -267,7 +270,7 @@ def train(rank, gpu, args):
             
             Dfake = modelD(pred_z0, c=y)
             Dfake_loss = F.softplus(Dfake).mean()
-            Dloss = Dreal_loss + grad_real + Dfake_loss
+            Dloss = (Dreal_loss + grad_real + Dfake_loss) * gan_lamb
             Dloss.backward()
             optimizerD.step()
 
@@ -283,7 +286,7 @@ def train(rank, gpu, args):
             con_loss = F.mse_loss(pred_z0, gt_z0)
 
             # loss = fm_loss + con_loss
-            loss = Gloss + fm_loss + con_loss
+            loss = Gloss * gan_lamb + fm_loss + con_loss
             loss.backward()
             optimizer.step()
 
@@ -316,7 +319,7 @@ def train(rank, gpu, args):
                     if y is not None:
                         y = y[:4]
                     sample_model = partial(model, y=y)
-                    traj, x0_list = flow.sample_ode_generative(rand, args.num_sample_timesteps)
+                    traj, x0_list = flow.sample_ode_generative_stochastic(rand, args.num_sample_timesteps)
                     fake_image = traj[-1]
                     fake_image = first_stage_model.decode(fake_image / args.scale_factor).sample
                 traj = torch.cat(traj, dim=0)
@@ -429,6 +432,7 @@ if __name__ == '__main__':
     parser.add_argument('--fm_loss', action='store_true', default=False)
     parser.add_argument('--num_sample_timesteps', type=int, default=10)
 
+
     # discriminator
     parser.add_argument('--lrD', type=float, default=1e-4, help='learning rate d')
     parser.add_argument('--d_base_channels', type=int, default=32768,
@@ -439,6 +443,8 @@ if __name__ == '__main__':
                         help='lazy regulariation.')
     parser.add_argument('--d_temb_channels', type=int, default=None,
                         help='number of discriminator temb channels')
+    parser.add_argument('--gan_warmup_iters', type=int, default=0,
+                        help='warmup iterations for gan loss')
 
     # training
     parser.add_argument('--exp', default='experiment_cifar_default', help='name of experiment')
