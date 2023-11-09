@@ -138,7 +138,7 @@ def sample_and_test(rank, gpu, args):
 
     # ckpt = torch.load('./saved_info/consistent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)["ema_model"]
     # ckpt = torch.load('./saved_info/cd_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
-    ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_ema_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
     print("Finish loading model")
     # loading weights from ddp in single gpu
     for key in list(ckpt.keys()):
