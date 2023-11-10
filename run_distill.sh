@@ -17,7 +17,7 @@
 set -x
 set -e
 
-export MASTER_PORT=10010
+export MASTER_PORT=10011
 export WORLD_SIZE=1
 
 export SLURM_JOB_NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ' ')
@@ -37,13 +37,12 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 
 ############################################### ADM ~ CelebA 256 ###############################################
 # --multi_gpu 
-python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher \
+CUDA_VISIBLE_DEVICES=1 python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_songbound0.2_warmup15k \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
     --batch_size 64 --num_epoch 400 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
     --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
     --use_origin_adm \
-    --num_head_channels 64 \
     --lr 2e-5 --scale_factor 0.18215 \
     --num_timesteps 100 \
     --target_ema_decay 0.95 \
@@ -57,7 +56,9 @@ python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0
     --lrD 1e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
     --num_sample_timesteps 2 \
     --no_lr_decay \
-    --resume 
+    --gan_warmup_iters 15_000 \
+    # --num_head_channels 64 \
+    # --resume 
     # --augment 0.15 \
 
 

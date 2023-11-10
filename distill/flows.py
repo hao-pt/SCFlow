@@ -307,7 +307,7 @@ class ConsistencyFlow(RectifiedFlow):
         if return_pred_z0:
           pred_z0 = pre_zt - t.view(-1, 1, 1, 1) * pred_vt
           gt_z0 = now_zt - now_t.view(-1, 1, 1, 1) * gt_vt
-          # gt_z0[now_t < 0.2] = z0[now_t < 0.2]
+          gt_z0[now_t < 0.2] = z0[now_t < 0.2]
           return pred_vt, gt_vt, gt_flow, pred_z0, gt_z0
         return pred_vt, gt_vt, gt_flow
 

@@ -36,18 +36,20 @@ export PYTHONFAULTHANDLER=1
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
 ############################################### ADM ~ CelebA 256 ###############################################
-CUDA_VISIBLE_DEVICES=0 python train_flow_latent.py --exp celeba_f8_lr5e-5_adm_augment0.15 \
+CUDA_VISIBLE_DEVICES=0 python train_flow_latent.py --exp celeba_f8_adm_resume \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-    --batch_size 64 --num_epoch 500 \
+    --batch_size 64 --num_epoch 400 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-    --nf 192 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 3 \
+    --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
     --use_origin_adm \
-    --lr 5e-5 --scale_factor 0.18215 \
+    --lr 1e-5 --scale_factor 0.18215 \
     --save_content --save_content_every 10 \
     --master_port $MASTER_PORT \
     --use_ema \
-    --num_head_channels 64 \
-    --augment 0.15 \
+    --model_ckpt saved_info/latent_flow/celeba_256/celeb256_f8_adm/model_450.pth \
+    --no_lr_decay
+    # --augment 0.15 \
+    # --num_head_channels 64 \
 
 # # --multi_gpu 
 # accelerate launch --num_processes 1 --mixed_precision fp16 --main_process_port 28500 train_flow_latent_faster.py --exp celeba_f8_lr5e-5_t1 \
