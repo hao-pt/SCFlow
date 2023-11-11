@@ -49,33 +49,33 @@ CUDA_VISIBLE_DEVICES={device} python test_flow_latent.py --exp $EXP \
     --method {method} --num_steps {num_steps} \
     --compute_fid --output_log $OUTPUT_LOG \
     --master_port $MASTER_PORT  --num_process_per_node {num_gpus} \
-    --use_origin_adm \
-    --num_head_channels 64 \
-    # --num_classes 1 --label_dropout 0. \
+    --num_classes 1 --label_dropout 0. \
+    # --use_origin_adm \
+    # --num_head_channels 64 \
     # --use_karras_samplers \
 
 
 """
 
 ###### ARGS
-model_type = "adm" # or "DiT-L/2" or "adm"
-dataset = "ffhq_256"
-exp = "ffhq_f8_lr2e-5_adm"
-BASE_PORT = 8014
-num_gpus = 2
-device = "0,1" #,2,3,4,5,6,7"
+model_type = ["DiT-L/2", "adm"][0]
+dataset = "celeba_256"
+exp = "celeb_f8_dit_resume"
+BASE_PORT = 8015
+num_gpus = 1
+device = "0" #,2,3,4,5,6,7"
 
 config = pd.DataFrame({
-    "epochs": [350, 325],
-    "num_steps": [0]*2,
-    "methods": ['dopri5']*2,
-    "cfg_scale": [1]*2,
+    "epochs": [100, 125, 150, 175, 200],
+    "num_steps": [0]*5,
+    "methods": ['dopri5']*5,
+    "cfg_scale": [1]*5,
 })
 print(config)
 
 ###################################
-slurm_file_path = f"/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurm_scripts/{exp}/run.sh"
-slurm_output = f"/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurm_scripts/{exp}/"
+slurm_file_path = f"/lustre/scratch/client/vinai/users/quandm7/hao_workspace/cnf_flow_new/slurm_scripts/{exp}/run.sh"
+slurm_output = f"/lustre/scratch/client/vinai/users/quandm7/hao_workspace/cnf_flow_new/slurm_scripts/{exp}/"
 output_log = f"{slurm_output}/log"
 os.makedirs(slurm_output, exist_ok=True)
 job_name = "test"
