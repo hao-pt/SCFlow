@@ -144,11 +144,11 @@ def train(rank, gpu, args):
                   .format(checkpoint['epoch']))
         del checkpoint
 
-    elif args.model_ckpt and os.path.exists(os.path.join(exp_path, args.model_ckpt)):
-        checkpoint_file = os.path.join(exp_path, args.model_ckpt)
+    elif args.model_ckpt and os.path.exists(args.model_ckpt):
+        checkpoint_file = args.model_ckpt
         checkpoint = torch.load(checkpoint_file, map_location=device)
         epoch = int(args.model_ckpt.split("_")[-1][:-4])
-        init_epoch = epoch
+        init_epoch = 0
         model.load_state_dict(checkpoint)
         global_step = 0
 
@@ -187,7 +187,7 @@ def train(rank, gpu, args):
             # u = (1 - 1e-5) * z_1 - z_0
             z_t = (1 - t) * z_0 + t * z_1
             u = z_1 - z_0
-            v = model(t.squeeze(), z_t, y, augment_labels)
+            v = model(t.squeeze(), z_t, y) # augment_labels)
             loss = F.mse_loss(v, u)
             loss.backward()
             optimizer.step()
@@ -362,6 +362,10 @@ if __name__ == '__main__':
     size = args.num_process_per_node
 
     if size > 1:
+        try:
+            torch.multiprocessing.set_start_method('spawn')
+        except RuntimeError:
+            pass
         processes = []
         for rank in range(size):
             args.local_rank = rank
