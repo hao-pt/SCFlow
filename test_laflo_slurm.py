@@ -63,7 +63,7 @@ dataset = "celeba_256"
 exp = "celeba_f8_adm_resume"
 BASE_PORT = 8014
 num_gpus = 1
-device = "3" #,2,3,4,5,6,7"
+device = "0" #,2,3,4,5,6,7"
 
 config = pd.DataFrame({
     "epochs": [25, 50, 75],
@@ -74,8 +74,8 @@ config = pd.DataFrame({
 print(config)
 
 ###################################
-slurm_file_path = f"/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurm_scripts/{exp}/run.sh"
-slurm_output = f"/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurm_scripts/{exp}/"
+slurm_file_path = f"/lustre/scratch/client/vinai/users/quandm7/hao_workspace/cnf_flow_new/slurm_scripts/{exp}/run.sh"
+slurm_output = f"/lustre/scratch/client/vinai/users/quandm7/hao_workspace/cnf_flow_new/slurm_scripts/{exp}/"
 output_log = f"{slurm_output}/log"
 os.makedirs(slurm_output, exist_ok=True)
 job_name = "test"
