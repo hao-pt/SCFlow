@@ -419,6 +419,10 @@ if __name__ == '__main__':
     size = args.num_process_per_node
 
     if size > 1 and args.compute_fid:
+        try:
+            torch.multiprocessing.set_start_method('spawn')
+        except RuntimeError:
+            pass
         processes = []
         for rank in range(size):
             args.local_rank = rank

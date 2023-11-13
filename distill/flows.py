@@ -139,6 +139,7 @@ class BaseFlow():
     batchsize = z.shape[0]
     traj.append(z.detach().clone())
     ori_noise = z1.detach().clone()
+    noise = ori_noise
 
     for i in tq(reversed(range(1,N+1))):
       t = torch.ones((batchsize,1), device=self.device) * i / N
@@ -157,8 +158,54 @@ class BaseFlow():
         x0hat = z - vt * t.view(-1,1,1,1)
         x0hat_list.append(x0hat)
     #   z = x0hat.detach().clone() * (1. - t_next.view(-1,1,1,1)) + t_next.view(-1,1,1,1) * torch.randn_like(z
+    #   gamma = torch.sqrt((1. - t_next.view(-1,1,1,1)**2)) # np.sqrt(1 - beta) 
+    #   noise = ori_noise * (1-gamma) + gamma * torch.randn_like(z)
       noise = ori_noise * beta + (1-beta) * torch.randn_like(z)
+    #   noise = np.sqrt(1- beta**2) * torch.randn_like(z)
       z = x0hat.detach().clone() * (1. - t_next.view(-1,1,1,1)) + t_next.view(-1,1,1,1) * noise
+      traj.append(z.detach().clone())
+
+    return traj, x0hat_list
+
+  @torch.no_grad()
+  def sample_ode_generative_gamma(self, z1=None, N=None, use_tqdm=True, solver = 'euler', beta=0., model_kwargs={}):
+    assert solver in ['euler', 'heun']
+    tq = tqdm if use_tqdm else lambda x: x
+    if N is None:
+      N = self.N    
+    if solver == 'heun' and N % 2 == 0:
+      raise ValueError("N must be odd when using Heun's method.")
+    if solver == 'heun':
+      N = (N + 1) // 2
+    dt = -1./N
+
+    traj = [] # to store the trajectory
+    x0hat_list = []
+    z = z1.detach().clone()
+    batchsize = z.shape[0]
+    traj.append(z.detach().clone())
+    ori_noise = z1.detach().clone()
+
+    for i in tq(reversed(range(1,N+1))):
+      t = torch.ones((batchsize,1), device=self.device) * i / N
+      t_next = torch.ones((batchsize,1), device=self.device) * (i-1) / N
+      if len(z1.shape) == 2:
+        if solver == 'heun':
+          raise NotImplementedError("Heun's method not implemented for 2D data.")
+        vt = self.model(t, z, **model_kwargs)
+      elif len(z1.shape) == 4:
+        vt = self.model(t.squeeze(), z, **model_kwargs)
+        # vt = vt / (torch.linalg.norm(vt) + 1e-5)
+        if solver == 'heun' and i > 1:
+          z_next = z.detach().clone() + vt * dt
+          vt_next = self.model(t_next.squeeze(), z_next, **model_kwargs)
+          vt = (vt + vt_next) / 2
+        x0hat = z - vt * t.view(-1,1,1,1)
+        x0hat_list.append(x0hat)
+    #   z = x0hat.detach().clone() * (1. - t_next.view(-1,1,1,1)) + t_next.view(-1,1,1,1) * torch.randn_like(z
+      # noise = ori_noise * beta + (1-beta) * torch.randn_like(z)
+      t_next = np.sqrt(1 - beta**2) * t_next
+      z = x0hat.detach().clone() * (1. - t_next.view(-1,1,1,1)) + t_next.view(-1,1,1,1) * torch.randn_like(z)
       traj.append(z.detach().clone())
 
     return traj, x0hat_list
