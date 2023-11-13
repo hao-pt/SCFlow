@@ -136,8 +136,8 @@ def sample_and_test(rank, gpu, args):
     model = create_network(args).to(device)
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device)
     # ckpt = torch.load('./saved_info/consistent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)["ema_model"]
-    # ckpt = torch.load('./saved_info/cd_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
-    ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_ema_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    ckpt = torch.load('./saved_info/cd_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    # ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_ema_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
     print("Finish loading model")
     # loading weights from ddp in single gpu
     for key in list(ckpt.keys()):
@@ -312,9 +312,9 @@ def sample_and_test(rank, gpu, args):
             paths = [save_dir, real_img_dir]
             kwargs = {'batch_size': 200, 'device': device, 'dims': 2048}
             fid = calculate_fid_given_paths(paths=paths, **kwargs)
-            print('FID = {}'.format(fid))
+            print('FID = {}, beta = {}'.format(fid, args.beta))
             with open(args.output_log, "a") as f:
-                f.write('Epoch = {}, FID = {}\n'.format(args.epoch_id, fid))
+                f.write('Epoch = {}, FID = {}, beta = {}\n'.format(args.epoch_id, fid, args.beta))
         dist.barrier()
         dist.destroy_process_group()
     else:

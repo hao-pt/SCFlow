@@ -44,13 +44,13 @@ echo "----------------------------"
 CUDA_VISIBLE_DEVICES={device} python test_flow_latent.py --exp $EXP \
     --dataset $DATASET --batch_size 100 --epoch_id $EPOCH_ID \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-    --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
+    --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
     --model_type $MODEL_TYPE \
     --method {method} --num_steps {num_steps} \
     --compute_fid --output_log $OUTPUT_LOG \
     --master_port $MASTER_PORT  --num_process_per_node {num_gpus} \
     --use_origin_adm \
-    --num_head_channels 64 \
+    # --num_head_channels 64 \
     # --num_classes 1 --label_dropout 0. \
     # --use_karras_samplers \
 
@@ -59,17 +59,17 @@ CUDA_VISIBLE_DEVICES={device} python test_flow_latent.py --exp $EXP \
 
 ###### ARGS
 model_type = "adm" # or "DiT-L/2" or "adm"
-dataset = "ffhq_256"
-exp = "ffhq_f8_lr2e-5_adm"
+dataset = "celeba_256"
+exp = "celeba_f8_adm_resume"
 BASE_PORT = 8014
 num_gpus = 1
 device = "3" #,2,3,4,5,6,7"
 
 config = pd.DataFrame({
-    "epochs": [350, 325],
-    "num_steps": [0]*2,
-    "methods": ['dopri5']*2,
-    "cfg_scale": [1]*2,
+    "epochs": [25, 50, 75],
+    "num_steps": [0]*3,
+    "methods": ['dopri5']*3,
+    "cfg_scale": [1]*3,
 })
 print(config)
 
