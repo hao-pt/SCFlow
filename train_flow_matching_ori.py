@@ -1,10 +1,3 @@
-# ---------------------------------------------------------------
-# Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-#
-# This work is licensed under the NVIDIA Source Code License
-# for Denoising Diffusion GAN. To view a copy of this license, see the LICENSE file.
-# ---------------------------------------------------------------
-
 import os
 import shutil
 import argparse
@@ -12,9 +5,7 @@ from functools import partial
 from omegaconf import OmegaConf
 from time import time
 import logging
-import copy
 from tqdm import tqdm
-import numpy as np
 import torch
 from torchdiffeq import odeint_adjoint as odeint
 import torch.nn as nn
@@ -23,13 +14,11 @@ import torch.optim as optim
 import torchvision
 import torch.distributed as dist
 from torch.multiprocessing import Process
-
 from datasets_prep import get_dataset
-from models import create_network, create_discriminator
-from EMA import EMA, EMAMODEL
+from models import create_network
+from EMA import EMA
 
-from sampler.karras_sample import karras_sample
-from distill.flows import ConsistencyFlow
+from models.augment import AugmentPipe
 
 
 def grad_penalty_call(args, D_real, x_t):
@@ -43,20 +32,12 @@ def grad_penalty_call(args, D_real, x_t):
     grad_penalty = args.r1_gamma / 2 * grad_penalty
     return grad_penalty
 
-
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
 
 
 def get_weight(model):
-    param_size = 0
-    for param in model.parameters():
-        param_size += param.nelement() * param.element_size()
-    buffer_size = 0
-    for buffer in model.buffers():
-        buffer_size += buffer.nelement() * buffer.element_size()
-
-    size_all_mb = (param_size + buffer_size) / 1024**2
+    size_all_mb = sum(p.numel() for p in model.parameters()) / 1024**2
     return size_all_mb
 
 
@@ -65,70 +46,47 @@ def broadcast_params(params):
         dist.broadcast(param.data, src=0)
 
 
-# def sample_from_model(model, x_0):
-#     t = torch.tensor([1., 0.], dtype=x_0.dtype, device="cuda")
-#     fake_image = odeint(model, x_0, t, atol=1e-5, rtol=1e-5, adjoint_params=model.func.parameters())
-#     return fake_image
+def sample_from_model(model, noise, Ns):
+    Ns = torch.tensor(Ns)
+    dts = 1./Ns
+    
+    trajs = []
+    x0hat_lists = []
+    
+    for i in range(Ns.size(0)):
+        traj = []
+        x0hat_list = []
+        z = noise.detach().clone()
+        traj.append(z.detach().clone())
+        N = Ns[i]
+        dt = dts[i]
+        for i in range(N, 0, -1):
+            t = torch.ones((z.size(0), 1), device=noise.device)*i/N
+            vt = model(t.squeeze(), z)
+            
+            x0hat = z - vt * t.view(-1,1,1,1)
+            x0hat_list.append(x0hat)
+            z = z.detach().clone() - vt * dt
+            traj.append(z.detach().clone())
+        trajs.append(traj)
+        x0hat_lists.append(x0hat_list)
+        
+    return trajs, x0hat_lists
 
-
-def sample_from_model(model, x, model_kwargs, args):
-    sample = karras_sample(
-            model,
-            x,
-            steps=args.num_steps,
-            model_kwargs=model_kwargs,
-            device=x.device,
-            clip_denoised=False,
-            sigma_min=1e-5,
-            sigma_max=1.0,
-            s_tmin=0.,
-            s_tmax=1.0,
-            s_churn=0.,
-            sampler="euler",
-            rho=1.0,
-            # ts=range(0, args.num_steps, 15),
-            # generator=generator,
-        )
-    return sample
-
-
-@torch.no_grad()
-def update_ema(ema_model, model, decay=0.9999):
-    """
-    Step the EMA model towards the current model.
-    """
-    ema_params = OrderedDict(ema_model.named_parameters())
-    model_params = OrderedDict(model.named_parameters())
-
-    for name, param in model_params.items():
-        # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
-        ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
-
-
-def requires_grad(model, flag=True):
-    """
-    Set requires_grad flag for all parameters in a model.
-    """
-    for p in model.parameters():
-        p.requires_grad = flag
 
 
 #%%
 def train(rank, gpu, args):
     from diffusers.models import AutoencoderKL
-    if args.faster_training:
-        # faster training
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+  
     torch.manual_seed(args.seed + rank)
     torch.cuda.manual_seed(args.seed + rank)
     torch.cuda.manual_seed_all(args.seed + rank)
 
     device = torch.device('cuda:{}'.format(gpu))
-    dtype = torch.float16 if args.use_fp16 else torch.float32
 
     exp = args.exp
-    parent_dir = "./saved_info/cd_flow/{}".format(args.dataset)
+    parent_dir = "./saved_info/latent_flow/{}".format(args.dataset)
     exp_path = os.path.join(parent_dir, exp)
     if rank == 0:
         if not os.path.exists(exp_path):
@@ -136,20 +94,18 @@ def train(rank, gpu, args):
             config_dict = vars(args)
             OmegaConf.save(config_dict, os.path.join(exp_path, "config.yaml"))
 
-        for handler in logging.root.handlers[:]:
-            logging.root.removeHandler(handler)
-        logging.basicConfig(
-            format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-            datefmt="%m/%d/%Y %H:%M:%S",
-            level=logging.INFO,
-            handlers=[
-                logging.StreamHandler(), 
-                logging.FileHandler(f"{exp_path}/log.txt")]
-        )
-        # Creating an object
-        logger = logging.getLogger(__name__)
-        logger.setLevel(logging.INFO)
-        logger.info(f"Exp path: {exp_path}")
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S",
+        level=logging.INFO,
+        handlers=[logging.StreamHandler(), logging.FileHandler(f"{exp_path}/log.txt")]
+    )
+    # Creating an object
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    logger.info(f"Exp path: {exp_path}")
 
     batch_size = args.batch_size
     dataset = get_dataset(args)
@@ -162,53 +118,39 @@ def train(rank, gpu, args):
                                                num_workers=4,
                                                pin_memory=True,
                                                sampler=train_sampler,
-                                               drop_last=True)
+                                               drop_last = True)
 
-    model = create_network(args).to(device, dtype=dtype)
+    # augment_pipe = AugmentPipe(p=args.augment, xflip=1e8, yflip=1, scale=1, rotate_frac=1, aniso=1, translate_frac=1) if args.augment else None
+    if args.augment:
+        args.augment_dim = 9
+
+    model = create_network(args).to(device)
     if args.use_grad_checkpointing and "DiT" in args.model_type:
         model.set_gradient_checkpointing()
-    target_ema = EMAMODEL(model)  # Create an EMA of the model for use after training
 
-    first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device, dtype=dtype)
+    first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device)
     first_stage_model = first_stage_model.eval()
     first_stage_model.train = False
     for param in first_stage_model.parameters():
         param.requires_grad = False
-
-
-    modelD = create_discriminator(args).to(device, dtype=dtype)
-    
+        
     if rank == 0:
         logger.info('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
         logger.info('FM size: {:.3f}MB'.format(get_weight(model)))
-        logger.info('Discriminator size: {:.3f}MB'.format(get_weight(modelD)))
+        
 
     broadcast_params(model.parameters())
-    broadcast_params(modelD.parameters())
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.0)
-    optimizerD = optim.AdamW(modelD.parameters(), lr=args.lrD, weight_decay=0.0)
-
+    
     if args.use_ema:
         optimizer = EMA(optimizer, ema_decay=args.ema_decay)
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epoch, eta_min=1e-5)
-    schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerD, args.num_epoch, eta_min=1e-5)
-
     #ddp
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=False)
     model.train()  # important! This enables embedding dropout for classifier-free guidance
-    modelD = nn.parallel.DistributedDataParallel(modelD, device_ids=[gpu], find_unused_parameters=True)
-    modelD.train()
 
-    if args.model_ckpt:
-        # teacher = copy.deepcopy(model)
-        ckpt = torch.load(args.model_ckpt, map_location=device)
-        model.load_state_dict(ckpt)
-        # for param in model.parameters():
-        #     param.requires_grad = False
-        teacher = copy.deepcopy(model)
-        teacher.eval()
 
     if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
@@ -220,123 +162,69 @@ def train(rank, gpu, args):
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
         global_step = checkpoint["global_step"]
-        # load D
-        modelD.load_state_dict(checkpoint['modelD_dict'])
-        optimizerD.load_state_dict(checkpoint['optimizerD'])
-        schedulerD.load_state_dict(checkpoint['schedulerD'])
 
-        if rank == 0:
-            logger.info("=> resume checkpoint (epoch {})"
-                    .format(checkpoint['epoch']))
+        logger.info("=> resume checkpoint (epoch {})"
+                  .format(checkpoint['epoch']))
         del checkpoint
-
     else:
         global_step, epoch, init_epoch = 0, 0, 0
-    
-    flow = ConsistencyFlow(device, model=model, ema_model=target_ema, threshold=args.init_threshold, pretrained_model=teacher, 
-        TN=args.num_timesteps, discrete=args.discrete_timesteps, skip=args.skip_step)
+
     use_label = True if "imagenet" in args.dataset else False
     is_latent_data = True if "latent" in args.dataset else False
     start_time = time()
     for epoch in range(init_epoch, args.num_epoch+1):
         train_sampler.set_epoch(epoch)
-        # if epoch > 50 and epoch % 20 == 0 and rank == 0:
-        #     flow.threshold = flow.threshold + 0.1
-        #     print("updating thresold = ", flow.threshold)
 
-        for iteration, (x, y) in enumerate(tqdm(data_loader)):
-            x_0 = x.to(device, dtype=dtype, non_blocking=True)
+        for iteration, (x, _) in enumerate(tqdm(data_loader)):
+            x_0 = x.to(device, non_blocking=True)
             y = None if not use_label else y.to(device, non_blocking=True)
+            model.zero_grad()
             if is_latent_data:
                 z_0 = x_0 * args.scale_factor
             else:
                 z_0 = first_stage_model.encode(x_0).latent_dist.sample().mul_(args.scale_factor)
-            z_0.requires_grad = True
-            x_0.requires_grad = True
+            
+            
+            # sample t
+            t = torch.rand((z_0.size(0),), device=device)            
+            t = t.view(-1, 1, 1, 1)
             z_1 = torch.randn_like(z_0)
-            model_kwargs = {"y": y}
-                
-            t = torch.rand((z_1.shape[0], 1), device=device).float()
-            v_pred, v_target, gt_flow, pred_z0, gt_z0 = flow.get_train_tuple(z_0, z_1, t=t, model_kwargs=model_kwargs, return_pred_z0=True)
-            
-            
-            for p in modelD.parameters():
-                p.requires_grad = True
-            modelD.zero_grad()
-            # calc D real
-            Dreal = modelD(x_0, c=y)
-            Dreal_loss = F.softplus(-Dreal).mean()
-            # penalty discriminator
-            grad_real = 0.
-            if args.lazy_reg is None:
-                grad_real = grad_penalty_call(args, Dreal, x_0)
-            else:
-                if global_step % args.lazy_reg == 0:
-                    grad_real = grad_penalty_call(args, Dreal, x_0)
-            # calc D fake
-            with torch.no_grad():
-                pred_x0 = first_stage_model.decode(pred_z0 / args.scale_factor).sample
-                
-            Dfake = modelD(pred_x0.detach().requires_grad_(), c=y)
-            Dfake_loss = F.softplus(Dfake).mean()
-            Dloss = Dreal_loss + grad_real + Dfake_loss
-            Dloss.backward()
-            optimizerD.step()
-            
-            # update G network
-            for p in modelD.parameters():
-                p.requires_grad = False
-            model.zero_grad()
-            # compute D loss
-            out = modelD(pred_x0, c=y)
-            Gloss = F.softplus(-out).mean()
-            # flow matching loss and consistency loss
-            fm_loss = 0. if not args.fm_loss else F.mse_loss(z_0, pred_z0)
-            con_loss = F.mse_loss(pred_z0, gt_z0)
-            loss = fm_loss + con_loss + Gloss
-            # optimize 
+            z_t = (1 - t) * z_0 + t * z_1
+            u = z_1 - z_0
+            v = model(t.squeeze(), z_t)
+            pred_z_0 = z_t - t*v
+            pred_z_0_noise = z_1 - v
+                        
+            loss = F.mse_loss(u, v) + F.mse_loss(pred_z_0, z_0)
             loss.backward()
             optimizer.step()
-
-            # update ema target
-            flow.ema_model.ema_step(args.target_ema_decay, flow.model)
-
+            
             global_step += 1
             if iteration % 100 == 0:
                 if rank == 0:
-                    # Measure training speed:
                     end_time = time()
                     steps_per_sec = 100 / (end_time - start_time)
-                    logger.info('epoch {} iteration{}, Loss: {}, FMLoss: {}, CONLoss: {}, GLoss: {}, DLoss: {}, Train Steps/Sec: {:.2f}'.format(epoch,iteration, 
-                        loss.item(), 
-                        0. if not args.fm_loss else fm_loss.item(), 
-                        con_loss.item(), 
-                        Gloss.item(),
-                        Dloss.item(),
-                        steps_per_sec))
+                    logger.info('epoch {} iteration{}, Loss: {}, Train Steps/Sec: {:.2f}'.format(epoch, iteration, loss.item(), steps_per_sec))
                     start_time = time()
+            
 
         if not args.no_lr_decay:
             scheduler.step()
-            schedulerD.step()
 
         if rank == 0:
             if epoch % args.plot_every == 0:
+                Ns = [1, 2, 5, 10, 50]
                 with torch.no_grad():
                     rand = torch.randn_like(z_0)[:4]
                     if y is not None:
                         y = y[:4]
                     sample_model = partial(model, y=y)
-                    traj, x0_list = flow.sample_ode_generative(rand, args.num_sample_timesteps)
-                    fake_image = traj[-1]
-                    fake_image = first_stage_model.decode(fake_image / args.scale_factor).sample
-                traj = torch.cat(traj, dim=0)
-                traj = first_stage_model.decode(traj / args.scale_factor).sample
-                x0_list = torch.cat(x0_list, dim=0)
-                x0_list = first_stage_model.decode(x0_list / args.scale_factor).sample
-                torchvision.utils.save_image(x0_list, os.path.join(exp_path, 'x0_epoch_{}.png'.format(epoch)), normalize=True, nrow=4)
-                torchvision.utils.save_image(traj, os.path.join(exp_path, 'traj_epoch_{}.png'.format(epoch)), normalize=True, nrow=4)
-                torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}.png'.format(epoch)), normalize=True)
+                    trajs, x0hat_lists = sample_from_model(sample_model, rand, Ns)
+                    for i in range(len(Ns)):
+                        N = Ns[i]
+                        fake_image = trajs[i][-1]
+                        fake_image = first_stage_model.decode(fake_image / args.scale_factor).sample
+                        torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}_{}.png'.format(epoch, N)), normalize=True, nrow=4)
                 logger.info("Finish sampling")
 
             if args.save_content:
@@ -344,16 +232,14 @@ def train(rank, gpu, args):
                     logger.info('Saving content.')
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
-                               'scheduler': scheduler.state_dict(),
-                               'modelD_dict': modelD.state_dict(), 'optimizerD': optimizerD.state_dict(),
-                               'schedulerD': schedulerD.state_dict()
-                               }
+                               'scheduler': scheduler.state_dict()}
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
+                torch.save(model.state_dict(), os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
                 if args.use_ema:
                     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-                torch.save(model.state_dict(), os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
+                torch.save(model.state_dict(), os.path.join(exp_path, 'model_ema_{}.pth'.format(epoch)))
                 if args.use_ema:
                     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
@@ -408,6 +294,7 @@ if __name__ == '__main__':
                             help='drop-out rate')
     parser.add_argument('--label_dim', type=int, default=0,
                             help='label dimension, 0 if unconditional')
+    parser.add_argument('--augment', type=float, default=0.)
     parser.add_argument('--augment_dim', type=int, default=0,
                             help='dimension of augmented label, 0 if not used')
     parser.add_argument('--num_classes', type=int, default=None,
@@ -432,30 +319,12 @@ if __name__ == '__main__':
                             help='number of head channels')
 
     parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="stabilityai/sd-vae-ft-mse")
-
-    # distill
-    parser.add_argument('--num_timesteps', type=int, default=200)
-    parser.add_argument('--discrete_timesteps', action='store_true', default=False)
-    parser.add_argument('--skip_step', type=int, default=0)
-    parser.add_argument('--fm_loss', action='store_true', default=False)
-    parser.add_argument('--num_sample_timesteps', type=int, default=10)
-
-    # discriminator
-    parser.add_argument('--lrD', type=float, default=1e-4, help='learning rate d')
-    parser.add_argument('--d_base_channels', type=int, default=32768,
-                            help='number of discriminator base channels')
-    parser.add_argument('--r1_gamma', type=float,
-                        default=0.05, help='coef for r1 reg')
-    parser.add_argument('--lazy_reg', type=int, default=None,
-                        help='lazy regulariation.')
-    parser.add_argument('--d_temb_channels', type=int, default=None,
-                        help='number of discriminator temb channels')
-
+    
     # training
     parser.add_argument('--exp', default='experiment_cifar_default', help='name of experiment')
     parser.add_argument('--dataset', default='cifar10', help='name of dataset')
     parser.add_argument('--datadir', default='./data')
-    parser.add_argument('--use_fp16', action='store_true', default=False)
+    parser.add_argument('--num_timesteps', type=int, default=200)
     parser.add_argument('--use_grad_checkpointing', action='store_true', default=False,
         help="Enable gradient checkpointing for mem saving")
 
@@ -473,14 +342,10 @@ if __name__ == '__main__':
     parser.add_argument('--use_ema', action='store_true', default=False,
                             help='use EMA or not')
     parser.add_argument('--ema_decay', type=float, default=0.9999, help='decay rate for EMA')
-    parser.add_argument('--target_ema_decay', type=float, default=0.95, help='decay rate for target EMA model')
-    parser.add_argument('--faster_training',action='store_true', default=False)
-    parser.add_argument('--init_threshold', type=float, default=0.2, help='training threshold')
-    
 
 
     parser.add_argument('--save_content', action='store_true', default=False)
-    parser.add_argument('--save_content_every', type=int, default=10, help='save content for resuming every x epochs')
+    parser.add_argument('--save_content_every', type=int, default=5, help='save content for resuming every x epochs')
     parser.add_argument('--save_ckpt_every', type=int, default=25, help='save ckpt every x epochs')
     parser.add_argument('--plot_every', type=int, default=1, help='plot every x epochs')
 
@@ -495,6 +360,7 @@ if __name__ == '__main__':
                         help='rank of process in the node')
     parser.add_argument('--master_address', type=str, default='127.0.0.1',
                         help='address for master')
+
     parser.add_argument('--master_port', type=str, default='6000',
                         help='port for master')
 
@@ -503,11 +369,6 @@ if __name__ == '__main__':
     size = args.num_process_per_node
 
     if size > 1:
-        try:
-            torch.multiprocessing.set_start_method('spawn')
-        except RuntimeError:
-            pass
-        
         processes = []
         for rank in range(size):
             args.local_rank = rank

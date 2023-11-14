@@ -17,8 +17,8 @@ def create_network(config):
     )
 
 def create_discriminator(config):
-    kwargs = dict(c_dim=0, img_resolution=config.image_size//config.f, 
-        img_channels=config.num_in_channels, channel_base=config.d_base_channels,
+    kwargs = dict(c_dim=0, img_resolution=config.image_size, 
+        img_channels=3, channel_base=config.d_base_channels,
         temb_dim=config.d_temb_channels)
     model = Discriminator(**kwargs)
     return model

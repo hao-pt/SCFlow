@@ -113,6 +113,7 @@ def sample_and_test(rank, gpu, args):
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device)
 
     ckpt = torch.load('./saved_info/cd_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    # ckpt = torch.load('./saved_info/cd_flow/{}/content.pth'.format(args.dataset))["model_dict"]
     print("Finish loading model")
     # loading weights from ddp in single gpu
     for key in list(ckpt.keys()):
@@ -157,7 +158,7 @@ def sample_and_test(rank, gpu, args):
         if not args.use_karras_samplers:
             x0hat_list, traj = sample_from_model(model, x, model_kwargs, args)
             fake_sample = traj[-1] 
-            print(torch.max(fake_sample), torch.min(fake_sample))
+            # print(torch.max(fake_sample), torch.min(fake_sample))
         else:
             fake_sample = sample_from_model2(model, x, model_kwargs, generator, args)
 
