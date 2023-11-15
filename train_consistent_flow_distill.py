@@ -270,7 +270,7 @@ def train(rank, gpu, args):
             
             Dfake = modelD(pred_z0, c=y)
             Dfake_loss = F.softplus(Dfake).mean()
-            Dloss = (Dreal_loss + grad_real + Dfake_loss) * gan_lamb
+            Dloss = (Dreal_loss + grad_real + Dfake_loss) # * gan_lamb
             Dloss.backward()
             optimizerD.step()
 

@@ -44,25 +44,24 @@ echo "----------------------------"
 CUDA_VISIBLE_DEVICES={device} python test_flow_latent.py --exp $EXP \
     --dataset $DATASET --batch_size 100 --epoch_id $EPOCH_ID \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-    --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
+    --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
     --model_type $MODEL_TYPE \
     --method {method} --num_steps {num_steps} \
     --compute_fid --output_log $OUTPUT_LOG \
     --master_port $MASTER_PORT  --num_process_per_node {num_gpus} \
-    --num_classes 1 --label_dropout 0. \
-    --faster_test \
-    # --use_origin_adm \
+    --use_origin_adm \
     # --num_head_channels 64 \
+    # --num_classes 1 --label_dropout 0. \
     # --use_karras_samplers \
 
 
 """
 
 ###### ARGS
-model_type = ["DiT-L/2", "adm"][0]
+model_type = "adm" # or "DiT-L/2" or "adm"
 dataset = "celeba_256"
-exp = "celeb_f8_dit_resume"
-BASE_PORT = 8015
+exp = "celeba_f8_adm_resume"
+BASE_PORT = 8014
 num_gpus = 1
 device = "0" #,2,3,4,5,6,7"
 
