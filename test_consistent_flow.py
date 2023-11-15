@@ -105,7 +105,8 @@ def sample_from_model2(model, x, model_kwargs, generator, args):
 
 def sample_and_test(rank, gpu, args):
     from diffusers.models import AutoencoderKL
-    # torch.backends.cuda.matmul.allow_tf32 = True
+    if args.faster_test:
+        torch.backends.cuda.matmul.allow_tf32 = True
     torch.set_grad_enabled(False)
 
     seed = args.seed + rank
@@ -424,6 +425,7 @@ if __name__ == '__main__':
     parser.add_argument('--perturb', action='store_true', default=False)
     parser.add_argument('--stochastic', action='store_true', default=False)
     parser.add_argument('--beta', type=float, default=0., help='the level of stochasticity')
+    parser.add_argument('--faster_test', action='store_true', default=False)
 
     ###ddp
     parser.add_argument('--num_proc_node', type=int, default=1,

@@ -134,8 +134,10 @@ def sample_and_test(rank, gpu, args):
     model = create_network(args).to(device)
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device)
 
-    # ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
-    ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_ema{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    if not args.load_ema:
+        ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    else:
+        ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_ema{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
     print("Finish loading model")
     #loading weights from ddp in single gpu
     for key in list(ckpt.keys()):
@@ -391,6 +393,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='cifar10', help='name of dataset')
     parser.add_argument('--num_steps', type=int, default=40)
     parser.add_argument('--batch_size', type=int, default=200, help='sample generating batch size')
+    parser.add_argument('--load_ema', action='store_true', default=False)
 
     # sampling argument
     parser.add_argument('--use_karras_samplers', action='store_true', default=False)
