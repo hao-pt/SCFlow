@@ -50,6 +50,7 @@ CUDA_VISIBLE_DEVICES={device} python test_flow_latent.py --exp $EXP \
     --compute_fid --output_log $OUTPUT_LOG \
     --master_port $MASTER_PORT  --num_process_per_node {num_gpus} \
     --num_classes 1 --label_dropout 0. \
+    --faster_test \
     # --use_origin_adm \
     # --num_head_channels 64 \
     # --use_karras_samplers \
@@ -66,10 +67,10 @@ num_gpus = 1
 device = "0" #,2,3,4,5,6,7"
 
 config = pd.DataFrame({
-    "epochs": [100, 125, 150, 175, 200],
-    "num_steps": [0]*5,
-    "methods": ['dopri5']*5,
-    "cfg_scale": [1]*5,
+    "epochs": [25, 50],
+    "num_steps": [0]*2,
+    "methods": ['dopri5']*2,
+    "cfg_scale": [1]*2,
 })
 print(config)
 
