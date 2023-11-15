@@ -103,7 +103,8 @@ def sample_from_model2(model, x, model_kwargs, generator, args):
 
 def sample_and_test(rank, gpu, args):
     from diffusers.models import AutoencoderKL
-    # torch.backends.cuda.matmul.allow_tf32 = True
+    if args.faster_test:
+        torch.backends.cuda.matmul.allow_tf32 = True
     torch.set_grad_enabled(False)
 
     seed = args.seed + rank
@@ -148,7 +149,8 @@ def sample_and_test(rank, gpu, args):
     del ckpt
 
     iters_needed = args.n_sample // args.batch_size
-    save_dir = "./generated_samples/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
+    # save_dir = "./generated_samples/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
+    save_dir = "./generated_samples_10k/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
     # save_dir = "./generated_samples/{}".format(args.dataset)
     if args.method in FIXER_SOLVER:
         save_dir += "_s{}".format(args.num_steps)
@@ -394,6 +396,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', type=int, default=40)
     parser.add_argument('--batch_size', type=int, default=200, help='sample generating batch size')
     parser.add_argument('--load_ema', action='store_true', default=False)
+    parser.add_argument('--faster_test', action='store_true', default=False)
 
     # sampling argument
     parser.add_argument('--use_karras_samplers', action='store_true', default=False)

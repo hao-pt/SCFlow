@@ -58,7 +58,7 @@ CUDA_VISIBLE_DEVICES={device} python test_flow_latent.py --exp $EXP \
 """
 
 ###### ARGS
-model_type = ["DiT-L/2", "adm"][0]
+model_type = ["DiT-L/2", "adm"][1]
 dataset = "celeba_256"
 exp = "celeba_f8_adm_resume_lr2e-6"
 BASE_PORT = 8014
