@@ -48,7 +48,7 @@ python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0
     --target_ema_decay 0. \
     --save_content --save_content_every 10 \
     --discrete_timesteps \
-    --master_port $MASTER_PORT --num_process_per_node 4 \
+    --master_port $MASTER_PORT --num_process_per_node 1 \
     --model_ckpt saved_info/latent_flow/celeba_256/celeb256_f8_adm/model_450.pth \
     --use_ema \
     --skip_step 20 \
@@ -56,9 +56,10 @@ python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0
     --lrD 1e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
     --num_sample_timesteps 2 \
     --no_lr_decay \
-    --resume \
+    --resume 
+    # --gan_warmup_iters 15_000 \
+    # --save_ckpt_every 5 \
     # --num_head_channels 64 \
-    # --resume 
     # --augment 0.15 \
 
 
