@@ -30,6 +30,7 @@ from EMA import EMA, EMAMODEL
 
 from sampler.karras_sample import karras_sample
 from distill.flows import ConsistencyFlow
+from pseudo_huber import PseudoHuberLoss
 
 
 def grad_penalty_call(args, D_real, x_t):
@@ -233,6 +234,7 @@ def train(rank, gpu, args):
     else:
         global_step, epoch, init_epoch = 0, 0, 0
     
+    loss_fn = PseudoHuberLoss(c=args.c) if args.huber_loss else nn.MSELoss()
     flow = ConsistencyFlow(device, model=model, ema_model=target_ema, pretrained_model=teacher, 
         TN=args.num_timesteps, discrete=args.discrete_timesteps, skip=args.skip_step)
     use_label = True if "imagenet" in args.dataset else False
@@ -282,8 +284,8 @@ def train(rank, gpu, args):
             out = modelD(pred_z0, c=y)
             Gloss = F.softplus(-out).mean()
 
-            fm_loss = 0. if not args.fm_loss else F.mse_loss(z_0, pred_z0)
-            con_loss = F.mse_loss(pred_z0, gt_z0)
+            fm_loss = 0. if not args.fm_loss else loss_fn(z_0, pred_z0)
+            con_loss = loss_fn(pred_z0, gt_z0)
 
             # loss = fm_loss + con_loss
             loss = Gloss * gan_lamb + fm_loss + con_loss
@@ -471,6 +473,9 @@ if __name__ == '__main__':
     parser.add_argument('--target_ema_decay', type=float, default=0.95, help='decay rate for target EMA model')
     parser.add_argument('--faster_training',action='store_true', default=False)
 
+    # loss function
+    parser.add_argument('--huber_loss',action='store_true', default=False)
+    parser.add_argument('--c', type=float, default=0., help='the constant in PseudoHuberLoss, if it is 0, the loss returns to l2 loss')
 
     parser.add_argument('--save_content', action='store_true', default=False)
     parser.add_argument('--save_content_every', type=int, default=10, help='save content for resuming every x epochs')
