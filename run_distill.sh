@@ -17,7 +17,7 @@
 set -x
 set -e
 
-export MASTER_PORT=10012
+export MASTER_PORT=10013
 export WORLD_SIZE=1
 
 export SLURM_JOB_NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ' ')
@@ -34,6 +34,12 @@ export NCCL_DEBUG=INFO
 export PYTHONFAULTHANDLER=1
 
 export PYTHONPATH=$(pwd):$PYTHONPATH
+
+# module purge
+# module load python/miniconda3/miniconda3
+# eval "$(conda shell.bash hook)"
+# conda activate ../envs/flow_pytorch2/
+
 
 ############################################### ADM ~ CelebA 256 ###############################################
 # --multi_gpu 

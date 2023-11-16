@@ -16,5 +16,5 @@ class PseudoHuberLoss(nn.Module):
         return f'beta={self.beta:g}, reduction={self.reduction!r}'
 
     def forward(self, input, target):
-        output = torch.sqrt(torch.sqrt((input - target)**2.) + self.c**2.) - self.c
+        output = torch.sqrt((input - target)**2. + self.c**2.) - self.c
         return self.reductions[self.reduction](output)
