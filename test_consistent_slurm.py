@@ -17,10 +17,11 @@ slurm_template = """#!/bin/bash -e
 #SBATCH --mail-user=v.haopt12@vinai.io
 #SBATCH --ntasks=1
 
-module purge
-module load python/miniconda3/miniconda3
-eval "$(conda shell.bash hook)"
-conda activate ../envs/flow_pytorch2/
+# module purge
+# module load python/miniconda3/miniconda3
+# eval "$(conda shell.bash hook)"
+# conda activate /lustre/scratch/client/vinai/users/ngocbh8/quan/envs/flow
+# cd /lustre/scratch/client/vinai/users/ngocbh8/quan/cnf_flow
 
 export MASTER_PORT={master_port}
 export WORLD_SIZE=1
@@ -35,43 +36,44 @@ export EPOCH_ID={epoch}
 export DATASET={dataset}
 export EXP={exp}
 export OUTPUT_LOG={output_log}
+export METHOD={method}
+export STEPS={num_steps}
 
 echo "----------------------------"
-echo $MODEL_TYPE $EPOCH_ID $DATASET $EXP {method} {num_steps}
+echo $MODEL_TYPE $EPOCH_ID $DATASET $EXP $METHOD $STEPS
 echo "----------------------------"
 
-CUDA_VISIBLE_DEVICES={device} python test_flow_latent.py --exp $EXP \
-    --dataset $DATASET --batch_size 100 --epoch_id $EPOCH_ID \
-    --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-    --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
-    --model_type $MODEL_TYPE \
-    --method {method} --num_steps {num_steps} \
-    --compute_fid --output_log $OUTPUT_LOG \
-    --master_port $MASTER_PORT  --num_process_per_node {num_gpus} \
-    --num_classes 1 --label_dropout 0. \
-    --faster_test \
-    --load_ema \
-    # --use_origin_adm \
-    # --n_sample 50_000 \
-    # --num_head_channels 64 \
-    # --use_karras_samplers \
-
+CUDA_VISIBLE_DEVICES={device} python test_consistent_flow.py --exp $EXP \
+        --dataset $DATASET --batch_size 100 --epoch_id $EPOCH_ID \
+        --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
+        --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
+        --master_port $MASTER_PORT --num_process_per_node {num_gpus} \
+        --use_karras_samplers \
+        --method $METHOD --num_steps $STEPS \
+        --stochastic --beta {beta} \
+        --compute_fid --output_log $OUTPUT_LOG \
+        --model_type DiT-L/2 --num_classes 1 --label_dropout 0. --faster_test \
+        # --use_origin_adm \
+        # --num_head_channels 32 \
+        # --measure_time \
+        # --compute_nfe \
 
 """
 
 ###### ARGS
 model_type = ["DiT-L/2", "adm"][0]
 dataset = ["celeba_256", "ffhq_256"][0]
-exp = "celeb_f8_dit_t2" # "ffhq_f8_lr2e-5_adm_resumelr2e-6" # 
-BASE_PORT = 8015
+exp = "celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_songbound0.2_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher" # # "celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher"  "celeba_f8_adm_lr2e-5_100steps_ema0.9_fmloss_skip30_gan_skipteacher"
+BASE_PORT = 8022
 num_gpus = 2
-device = "0,1" #,2,3,4,5,6,7"
+device = "0,2" #,2,3,4,5,6,7"
 
 config = pd.DataFrame({
-    "epochs": [450, 475],
-    "num_steps": [0]*2,
-    "methods": ['dopri5']*2,
-    "cfg_scale": [1]*2,
+    "epochs": [200]*4,
+    "num_steps": [2,4,8,16],
+    "methods": ['euler']*4,
+    "cfg_scale": [1]*4,
+    "beta": [0.]*4
 })
 print(config)
 
@@ -99,6 +101,7 @@ for idx, row in config.iterrows():
         num_steps=row.num_steps,
         device=device,
         cfg_scale=row.cfg_scale,
+        beta=row.beta,
     )
     mode = "w" if idx == 0 else "a"
     with open(slurm_file_path, mode) as f:
