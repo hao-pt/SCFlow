@@ -37,30 +37,30 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 
 ############################################### ADM ~ CelebA 256 ###############################################
 # --multi_gpu 
-# CUDA_VISIBLE_DEVICES=1 python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_warmup15k \
-#     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-#     --batch_size 64 --num_epoch 400 \
-#     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-#     --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
-#     --use_origin_adm \
-#     --lr 2e-5 --scale_factor 0.18215 \
-#     --num_timesteps 100 \
-#     --target_ema_decay 0.95 \
-#     --save_content --save_content_every 10 \
-#     --discrete_timesteps \
-#     --master_port $MASTER_PORT --num_process_per_node 1 \
-#     --model_ckpt saved_info/latent_flow/celeba_256/celeb256_f8_adm/model_450.pth \
-#     --use_ema \
-#     --skip_step 20 \
-#     --fm_loss \
-#     --lrD 1e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
-#     --num_sample_timesteps 2 \
-#     --no_lr_decay \
-#     --gan_warmup_iters 15_000 \
-#     --save_ckpt_every 5 \
-#     # --num_head_channels 64 \
-#     # --resume 
-#     # --augment 0.15 \
+CUDA_VISIBLE_DEVICES=2 python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan \
+    --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
+    --batch_size 96 --num_epoch 300 \
+    --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
+    --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
+    --use_origin_adm \
+    --lr 2e-5 --scale_factor 0.18215 \
+    --num_timesteps 100 \
+    --target_ema_decay 0. \
+    --save_content --save_content_every 10 \
+    --discrete_timesteps \
+    --master_port $MASTER_PORT --num_process_per_node 1 \
+    --model_ckpt saved_info/latent_flow/celeba_256/celeb256_f8_adm/model_450.pth \
+    --use_ema \
+    --skip_step 20 \
+    --fm_loss \
+    --lrD 1e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
+    --num_sample_timesteps 2 \
+    --no_lr_decay \
+    --resume 
+    # --gan_warmup_iters 15_000 \
+    # --save_ckpt_every 5 \
+    # --num_head_channels 64 \
+    # --augment 0.15 \
 
 
 ############################################### ADM ~ FFHQ 256 ###############################################
@@ -145,26 +145,26 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 
 
 ############################################### DiT-L/2 ~ CelebA 256 ###############################################
-CUDA_VISIBLE_DEVICES=0,2 python train_consistent_flow_distill.py --exp celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher_warmup15k \
-    --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-    --batch_size 24 --num_epoch 300 \
-    --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-    --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
-    --lr 2e-4 --scale_factor 0.18215 --no_lr_decay \
-    --model_type DiT-L/2 --num_classes 1 --label_dropout 0. \
-    --save_content --save_content_every 10 \
-    --master_port $MASTER_PORT --num_process_per_node 2 \
-    --target_ema_decay 0.95 \
-    --discrete_timesteps \
-    --model_ckpt saved_info/latent_flow/celeba_256/laflo_celeb_f8_dit/model_475.pth \
-    --use_ema \
-    --skip_step 20 \
-    --fm_loss \
-    --lrD 5e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
-    --gan_warmup_iters 15_000 \
-    --save_ckpt_every 5 \
-    --num_sample_timesteps 2 \
-    --faster_training \
+# CUDA_VISIBLE_DEVICES=0,2 python train_consistent_flow_distill.py --exp celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher_warmup15k \
+#     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
+#     --batch_size 24 --num_epoch 300 \
+#     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
+#     --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
+#     --lr 2e-4 --scale_factor 0.18215 --no_lr_decay \
+#     --model_type DiT-L/2 --num_classes 1 --label_dropout 0. \
+#     --save_content --save_content_every 10 \
+#     --master_port $MASTER_PORT --num_process_per_node 2 \
+#     --target_ema_decay 0.95 \
+#     --discrete_timesteps \
+#     --model_ckpt saved_info/latent_flow/celeba_256/laflo_celeb_f8_dit/model_475.pth \
+#     --use_ema \
+#     --skip_step 20 \
+#     --fm_loss \
+#     --lrD 5e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
+#     --gan_warmup_iters 15_000 \
+#     --save_ckpt_every 5 \
+#     --num_sample_timesteps 2 \
+#     --faster_training \
 
 
 ############################################### ADM ~ CelebA 1024 ###############################################
