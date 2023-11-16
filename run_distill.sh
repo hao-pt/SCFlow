@@ -1,4 +1,4 @@
-#!/bin/sh
+!/bin/sh
 #SBATCH --job-name=distill # create a short name for your job
 #SBATCH --output=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.out # create a output file
 #SBATCH --error=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.err # create a error file
@@ -17,7 +17,7 @@
 set -x
 set -e
 
-export MASTER_PORT=10010
+export MASTER_PORT=10012
 export WORLD_SIZE=1
 
 export SLURM_JOB_NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ' ')
@@ -37,18 +37,18 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 
 ############################################### ADM ~ CelebA 256 ###############################################
 # --multi_gpu 
-python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan_skipteacher \
-    --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-    --batch_size 64 --num_epoch 400 \
+python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan \
+    --dataset celeba_256 --datadir ../DiffusionGAN/data/celeba-lmdb/ \
+    --batch_size 24 --num_epoch 300 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
     --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
     --use_origin_adm \
     --lr 2e-5 --scale_factor 0.18215 \
     --num_timesteps 100 \
-    --target_ema_decay 0.95 \
+    --target_ema_decay 0. \
     --save_content --save_content_every 10 \
     --discrete_timesteps \
-    --master_port $MASTER_PORT --num_process_per_node 1 \
+    --master_port $MASTER_PORT --num_process_per_node 4 \
     --model_ckpt saved_info/latent_flow/celeba_256/celeb256_f8_adm/model_450.pth \
     --use_ema \
     --skip_step 20 \
@@ -56,15 +56,16 @@ python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0
     --lrD 1e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
     --num_sample_timesteps 2 \
     --no_lr_decay \
+    --resume \
     # --num_head_channels 64 \
     # --resume 
     # --augment 0.15 \
 
 
 ############################################### ADM ~ FFHQ 256 ###############################################
-# CUDA_VISIBLE_DEVICES=2 python train_consistent_flow_distill.py --exp ffhq_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher \
+# CUDA_VISIBLE_DEVICES=2 python train_consistent_flow_distill.py --exp ffhq_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher_warmup15k \
 #     --dataset ffhq_256 --datadir data/ffhq/ffhq-lmdb \
-#     --batch_size 92 --num_epoch 400 \
+#     --batch_size 92 --num_epoch 300 \
 #     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
 #     --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
 #     --lr 2e-5 --scale_factor 0.18215 \
@@ -72,14 +73,15 @@ python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0
 #     --master_port $MASTER_PORT --num_process_per_node 1 \
 #     --discrete_timesteps \
 #     --use_origin_adm \
-#     --model_ckpt saved_info/latent_flow/ffhq_256/ffhq_f8_lr2e-5_adm/model_375.pth \
+#     --num_head_channels 64 \
+#     --model_ckpt saved_info/latent_flow/ffhq_256/ffhq_f8_lr2e-5_adm/model_350.pth \
 #     --use_ema \
 #     --skip_step 20 \
 #     --fm_loss \
 #     --lrD 1e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
 #     --num_sample_timesteps 2 \
 #     --no_lr_decay \
-#     --resume \
+#     # --resume \
 
 
 ############################################### ADM ~ Bed 256 ###############################################
@@ -142,15 +144,15 @@ python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0
 
 
 ############################################### DiT-L/2 ~ CelebA 256 ###############################################
-# CUDA_VISIBLE_DEVICES=0 python train_consistent_flow_distill.py --exp celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher \
+# CUDA_VISIBLE_DEVICES=0,2 python train_consistent_flow_distill.py --exp celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher_warmup15k \
 #     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-#     --batch_size 24 --num_epoch 400 \
+#     --batch_size 24 --num_epoch 300 \
 #     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
 #     --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
 #     --lr 2e-4 --scale_factor 0.18215 --no_lr_decay \
 #     --model_type DiT-L/2 --num_classes 1 --label_dropout 0. \
 #     --save_content --save_content_every 10 \
-#     --master_port $MASTER_PORT \
+#     --master_port $MASTER_PORT --num_process_per_node 2 \
 #     --target_ema_decay 0.95 \
 #     --discrete_timesteps \
 #     --model_ckpt saved_info/latent_flow/celeba_256/laflo_celeb_f8_dit/model_475.pth \
@@ -158,7 +160,10 @@ python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0
 #     --skip_step 20 \
 #     --fm_loss \
 #     --lrD 5e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
+#     --gan_warmup_iters 15_000 \
+#     --save_ckpt_every 5 \
 #     --num_sample_timesteps 2 \
+#     --faster_training \
 
 
 ############################################### ADM ~ CelebA 1024 ###############################################

@@ -29,7 +29,7 @@ from sampler.random_util import get_generator
 from distill.flows import BaseFlow
 
 ADAPTIVE_SOLVER = ["dopri5", "dopri8", "adaptive_heun", "bosh3"]
-FIXER_SOLVER = ["euler", "rk4", "midpoint", "stochastic"]
+FIXER_SOLVER = ["euler", "rk4", "midpoint", "stochastic", "heun"]
 
 
 class NFECount(nn.Module):
@@ -191,10 +191,10 @@ def sample_and_test(rank, gpu, args):
         # else:
         #     fake_sample = sample_from_model2(model, x, model_kwargs, generator, args)
         if args.stochastic:
-            traj, x0_list = flow.sample_ode_generative_stochastic(x, model_kwargs=model_kwargs, beta=args.beta)
+            traj, x0_list = flow.sample_ode_generative_stochastic(x, model_kwargs=model_kwargs, beta=args.beta, solver=args.method)
             # traj, x0_list = flow.sample_ode_generative_gamma(x, model_kwargs=model_kwargs, beta=args.beta)
         else:
-            traj, x0_list = flow.sample_ode_generative(x, model_kwargs=model_kwargs)
+            traj, x0_list = flow.sample_ode_generative(x, model_kwargs=model_kwargs, solver=args.method)
             # traj, x0_list = flow.sample_ode_generative_range(x, T=torch.cumsum(torch.tensor([0.1/10]*10 + [0.8/30]*30 + [0.1/10]*10, device=device), dim=0), model_kwargs=model_kwargs)
         fake_sample = traj[-1]
 
@@ -314,9 +314,9 @@ def sample_and_test(rank, gpu, args):
             paths = [save_dir, real_img_dir]
             kwargs = {'batch_size': 200, 'device': device, 'dims': 2048}
             fid = calculate_fid_given_paths(paths=paths, **kwargs)
-            print('FID = {}'.format(fid))
+            print('FID = {}, beta = {}'.format(fid, args.beta))
             with open(args.output_log, "a") as f:
-                f.write('Epoch = {}, FID = {}\n'.format(args.epoch_id, fid))
+                f.write('Epoch = {}, FID = {}, beta = {}\n'.format(args.epoch_id, fid, args.beta))
         dist.barrier()
         dist.destroy_process_group()
     else:
@@ -447,12 +447,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
-
+    try:
+        torch.multiprocessing.set_start_method('spawn')
+    except RuntimeError:
+        pass
     if size > 1 and args.compute_fid:
-        try:
-            torch.multiprocessing.set_start_method('spawn')
-        except RuntimeError:
-            pass
+        
         processes = []
         for rank in range(size):
             args.local_rank = rank
