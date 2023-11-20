@@ -23,14 +23,15 @@ import torch.optim as optim
 import torchvision
 import torch.distributed as dist
 from torch.multiprocessing import Process
-
 from datasets_prep import get_dataset
 from models import create_network, create_discriminator
 from EMA import EMA, EMAMODEL
-
 from sampler.karras_sample import karras_sample
 from distill.flows import ConsistencyFlow
 
+
+def huber_loss(x, y, c = 0.01):
+    return torch.sqrt(F.mse_loss(x, y) + c**2) - c
 
 def grad_penalty_call(args, D_real, x_t):
     grad_real = torch.autograd.grad(
@@ -55,7 +56,6 @@ def get_weight(model):
     buffer_size = 0
     for buffer in model.buffers():
         buffer_size += buffer.nelement() * buffer.element_size()
-
     size_all_mb = (param_size + buffer_size) / 1024**2
     return size_all_mb
 
@@ -63,47 +63,6 @@ def get_weight(model):
 def broadcast_params(params):
     for param in params:
         dist.broadcast(param.data, src=0)
-
-
-# def sample_from_model(model, x_0):
-#     t = torch.tensor([1., 0.], dtype=x_0.dtype, device="cuda")
-#     fake_image = odeint(model, x_0, t, atol=1e-5, rtol=1e-5, adjoint_params=model.func.parameters())
-#     return fake_image
-
-
-def sample_from_model(model, x, model_kwargs, args):
-    sample = karras_sample(
-            model,
-            x,
-            steps=args.num_steps,
-            model_kwargs=model_kwargs,
-            device=x.device,
-            clip_denoised=False,
-            sigma_min=1e-5,
-            sigma_max=1.0,
-            s_tmin=0.,
-            s_tmax=1.0,
-            s_churn=0.,
-            sampler="euler",
-            rho=1.0,
-            # ts=range(0, args.num_steps, 15),
-            # generator=generator,
-        )
-    return sample
-
-
-@torch.no_grad()
-def update_ema(ema_model, model, decay=0.9999):
-    """
-    Step the EMA model towards the current model.
-    """
-    ema_params = OrderedDict(ema_model.named_parameters())
-    model_params = OrderedDict(model.named_parameters())
-
-    for name, param in model_params.items():
-        # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
-        ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
-
 
 def requires_grad(model, flag=True):
     """
@@ -116,10 +75,6 @@ def requires_grad(model, flag=True):
 #%%
 def train(rank, gpu, args):
     from diffusers.models import AutoencoderKL
-    if args.faster_training:
-        # faster training
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
     torch.manual_seed(args.seed + rank)
     torch.cuda.manual_seed(args.seed + rank)
     torch.cuda.manual_seed_all(args.seed + rank)
@@ -128,7 +83,11 @@ def train(rank, gpu, args):
     dtype = torch.float16 if args.use_fp16 else torch.float32
 
     exp = args.exp
-    parent_dir = "./saved_info/cd_flow/{}".format(args.dataset)
+    if args.model_ckpt:
+        parent_dir = "./saved_info/reflow_consistency/{}".format(args.dataset)
+    else:
+        parent_dir = "./saved_info/flow_consistency/{}".format(args.dataset)
+    
     exp_path = os.path.join(parent_dir, exp)
     if rank == 0:
         if not os.path.exists(exp_path):
@@ -167,50 +126,43 @@ def train(rank, gpu, args):
     model = create_network(args).to(device, dtype=dtype)
     if args.use_grad_checkpointing and "DiT" in args.model_type:
         model.set_gradient_checkpointing()
-    target_ema = EMAMODEL(model)  # Create an EMA of the model for use after training
-
+    
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device, dtype=dtype)
+    first_stage_model = torch.compile(first_stage_model, mode="max-autotune")
     first_stage_model = first_stage_model.eval()
     first_stage_model.train = False
     for param in first_stage_model.parameters():
         param.requires_grad = False
-
-
-    modelD = create_discriminator(args).to(device, dtype=dtype)
+    if args.use_gan:
+        modelD = create_discriminator(args).to(device, dtype=dtype)
     
     if rank == 0:
         logger.info('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
         logger.info('FM size: {:.3f}MB'.format(get_weight(model)))
-        logger.info('Discriminator size: {:.3f}MB'.format(get_weight(modelD)))
+        if args.use_gan:
+            logger.info('Discriminator size: {:.3f}MB'.format(get_weight(modelD)))
 
     broadcast_params(model.parameters())
-    broadcast_params(modelD.parameters())
-
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.0)
-    optimizerD = optim.AdamW(modelD.parameters(), lr=args.lrD, weight_decay=0.0)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epoch, eta_min=1e-5)
+    model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=False)
+    model.train() 
+    if args.use_gan:
+        broadcast_params(modelD.parameters())
+        optimizerD = optim.AdamW(modelD.parameters(), lr=args.lrD, weight_decay=0.0)
+        schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerD, args.num_epoch, eta_min=1e-5)
+        modelD = nn.parallel.DistributedDataParallel(modelD, device_ids=[gpu], find_unused_parameters=True)
+        modelD.train()
+        modelD_ = modelD
+        # modelD_ = torch.compile(modelD)
 
     if args.use_ema:
         optimizer = EMA(optimizer, ema_decay=args.ema_decay)
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epoch, eta_min=1e-5)
-    schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(optimizerD, args.num_epoch, eta_min=1e-5)
-
-    #ddp
-    model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=False)
-    model.train()  # important! This enables embedding dropout for classifier-free guidance
-    modelD = nn.parallel.DistributedDataParallel(modelD, device_ids=[gpu], find_unused_parameters=True)
-    modelD.train()
-
     if args.model_ckpt:
-        # teacher = copy.deepcopy(model)
         ckpt = torch.load(args.model_ckpt, map_location=device)
         model.load_state_dict(ckpt)
-        # for param in model.parameters():
-        #     param.requires_grad = False
-        teacher = copy.deepcopy(model)
-        teacher.eval()
-
-    if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
+    if args.resume:
         checkpoint_file = os.path.join(exp_path, 'content.pth')
         checkpoint = torch.load(checkpoint_file, map_location=device)
         init_epoch = checkpoint['epoch']
@@ -221,83 +173,104 @@ def train(rank, gpu, args):
         scheduler.load_state_dict(checkpoint['scheduler'])
         global_step = checkpoint["global_step"]
         # load D
-        modelD.load_state_dict(checkpoint['modelD_dict'])
-        optimizerD.load_state_dict(checkpoint['optimizerD'])
-        schedulerD.load_state_dict(checkpoint['schedulerD'])
-
+        if args.use_gan:
+            modelD.load_state_dict(checkpoint['modelD_dict'])
+            optimizerD.load_state_dict(checkpoint['optimizerD'])
+            schedulerD.load_state_dict(checkpoint['schedulerD'])
         if rank == 0:
             logger.info("=> resume checkpoint (epoch {})"
                     .format(checkpoint['epoch']))
         del checkpoint
-
     else:
         global_step, epoch, init_epoch = 0, 0, 0
+
+
+    teacher = copy.deepcopy(model)
+    teacher.eval()
+    target_ema = EMAMODEL(model)
+    model_ = model
+    model_ = torch.compile(model)
     
-    flow = ConsistencyFlow(device, model=model, ema_model=target_ema, threshold=args.init_threshold, pretrained_model=teacher, 
-        TN=args.num_timesteps, discrete=args.discrete_timesteps, skip=args.skip_step)
+    flow = ConsistencyFlow(device, 
+                            model=model_, 
+                            ema_model=target_ema, 
+                            threshold=args.init_threshold, 
+                            pretrained_model=teacher)
     use_label = True if "imagenet" in args.dataset else False
-    is_latent_data = True if "latent" in args.dataset else False
     start_time = time()
     for epoch in range(init_epoch, args.num_epoch+1):
         train_sampler.set_epoch(epoch)
-        # if epoch > 50 and epoch % 20 == 0 and rank == 0:
-        #     flow.threshold = flow.threshold + 0.1
-        #     print("updating thresold = ", flow.threshold)
 
         for iteration, (x, y) in enumerate(tqdm(data_loader)):
-            x_0 = x.to(device, dtype=dtype, non_blocking=True)
+            x0 = x.to(device, dtype=dtype, non_blocking=True)
             y = None if not use_label else y.to(device, non_blocking=True)
-            if is_latent_data:
-                z_0 = x_0 * args.scale_factor
+            z0 = first_stage_model.encode(x0).latent_dist.sample().mul_(args.scale_factor)
+            # set grad for gan
+            z0.requires_grad = True
+            x0.requires_grad = True
+            z1 = torch.randn_like(z0)
+            t = torch.rand((z1.shape[0], 1), device=device).float()
+            model_kwargs = {}
+            _, _, _, curr_z0, post_z0, reflow_z0_rescon, reflow_z0 = flow.get_train_tuple(z0, 
+                                                                                        z1, 
+                                                                                        t=t, 
+                                                                                        model_kwargs=model_kwargs)
+            # gan part
+            if args.use_gan:
+                for p in modelD_.parameters():
+                    p.requires_grad = True
+                optimizerD.zero_grad()
+                # calc D real
+                Dreal = modelD_(z0, c=y)
+                Dreal_loss = F.softplus(-Dreal).mean()
+                # penalty discriminator
+                grad_real = 0.
+                if args.lazy_reg is None:
+                    grad_real = grad_penalty_call(args, Dreal, z0)
+                else:
+                    if global_step % args.lazy_reg == 0:
+                        grad_real = grad_penalty_call(args, Dreal, z0)
+                Dfake = modelD_(curr_z0.detach().requires_grad_(), c=y) + modelD_(reflow_z0_rescon.detach().requires_grad_(), c=y)
+                Dfake_loss = F.softplus(Dfake).mean()
+                Dloss = Dreal_loss + Dfake_loss + grad_real
+                Dloss.backward()
+                optimizerD.step()
+                # update G network
+                for p in modelD_.parameters():
+                    p.requires_grad = False
+                optimizer.zero_grad()
+                # compute D loss
+                out = modelD_(curr_z0, c=y) + modelD_(reflow_z0_rescon, c=y)
+                Gloss = F.softplus(-out).mean()
             else:
-                z_0 = first_stage_model.encode(x_0).latent_dist.sample().mul_(args.scale_factor)
-            z_0.requires_grad = True
-            x_0.requires_grad = True
-            z_1 = torch.randn_like(z_0)
-            model_kwargs = {"y": y}
-                
-            t = torch.rand((z_1.shape[0], 1), device=device).float()
-            v_pred, v_target, gt_flow, pred_z0, gt_z0 = flow.get_train_tuple(z_0, z_1, t=t, model_kwargs=model_kwargs, return_pred_z0=True)
-            
-            
-            for p in modelD.parameters():
-                p.requires_grad = True
-            modelD.zero_grad()
-            # calc D real
-            Dreal = modelD(x_0, c=y)
-            Dreal_loss = F.softplus(-Dreal).mean()
-            # penalty discriminator
-            grad_real = 0.
-            if args.lazy_reg is None:
-                grad_real = grad_penalty_call(args, Dreal, x_0)
+                optimizer.zero_grad()
+
+            # consistenncy + reflow
+            if args.model_ckpt:
+                if global_step < args.warm_up_con:
+                    con_loss = F.mse_loss(curr_z0, post_z0)
+                    loss = con_loss
+                    reflow_loss = torch.tensor(0.)
+                else:
+                    reflow_loss = F.mse_loss(reflow_z0_rescon, reflow_z0.detach()) #+ F.mse_loss(pred_z0, z_0) + F.mse_loss(pred_z0_, z_0)
+                    # update inner loop
+                    if global_step % args.inner_skip == 0:
+                        con_loss = F.mse_loss(curr_z0, post_z0)
+                        loss = reflow_loss + con_loss
+                    else:
+                        loss = reflow_loss
+                    # gan loss
+                    if args.use_gan:
+                        loss += Gloss
             else:
-                if global_step % args.lazy_reg == 0:
-                    grad_real = grad_penalty_call(args, Dreal, x_0)
-            # calc D fake
-            with torch.no_grad():
-                pred_x0 = first_stage_model.decode(pred_z0 / args.scale_factor).sample
-                
-            Dfake = modelD(pred_x0.detach().requires_grad_(), c=y)
-            Dfake_loss = F.softplus(Dfake).mean()
-            Dloss = Dreal_loss + grad_real + Dfake_loss
-            Dloss.backward()
-            optimizerD.step()
-            
-            # update G network
-            for p in modelD.parameters():
-                p.requires_grad = False
-            model.zero_grad()
-            # compute D loss
-            out = modelD(pred_x0, c=y)
-            Gloss = F.softplus(-out).mean()
-            # flow matching loss and consistency loss
-            fm_loss = 0. if not args.fm_loss else F.mse_loss(z_0, pred_z0)
-            con_loss = F.mse_loss(pred_z0, gt_z0)
-            loss = fm_loss + con_loss + Gloss
+                con_loss = F.mse_loss(curr_z0, post_z0)
+                flow_loss = F.mse(curr_z0, z0)
+                loss = con_loss + flow_loss
+                if args.use_gan:
+                    loss += Gloss
             # optimize 
             loss.backward()
             optimizer.step()
-
             # update ema target
             flow.ema_model.ema_step(args.target_ema_decay, flow.model)
 
@@ -307,23 +280,35 @@ def train(rank, gpu, args):
                     # Measure training speed:
                     end_time = time()
                     steps_per_sec = 100 / (end_time - start_time)
-                    logger.info('epoch {} iteration{}, Loss: {}, FMLoss: {}, CONLoss: {}, GLoss: {}, DLoss: {}, Train Steps/Sec: {:.2f}'.format(epoch,iteration, 
-                        loss.item(), 
-                        0. if not args.fm_loss else fm_loss.item(), 
-                        con_loss.item(), 
-                        Gloss.item(),
-                        Dloss.item(),
-                        steps_per_sec))
+                    if args.use_gan:
+                            logger.info('epoch {} iteration{}, Loss: {}, FLoss: {}, CONLoss: {}, Gloss: {}, Dloss {} Train Steps/Sec: {:.2f}'.format(
+                                epoch,
+                                iteration, 
+                                loss.item(), 
+                                reflow_loss.item() if args.model_ckpt else flow_loss.item(), 
+                                con_loss.item(), 
+                                Gloss.item(),
+                                Dloss.item(),
+                                steps_per_sec))
+                    else:
+                        logger.info('epoch {} iteration{}, Loss: {}, FLoss: {}, CONLoss: {}, Train Steps/Sec: {:.2f}'.format(
+                            epoch,
+                            iteration, 
+                            loss.item(), 
+                            reflow_loss.item() if args.model_ckpt else flow_loss.item(), 
+                            con_loss.item(), 
+                            steps_per_sec))
                     start_time = time()
 
         if not args.no_lr_decay:
             scheduler.step()
-            schedulerD.step()
+            if args.use_gan:
+                schedulerD.step()
 
         if rank == 0:
             if epoch % args.plot_every == 0:
                 with torch.no_grad():
-                    rand = torch.randn_like(z_0)[:4]
+                    rand = torch.randn_like(z0)[:4]
                     if y is not None:
                         y = y[:4]
                     sample_model = partial(model, y=y)
@@ -342,12 +327,16 @@ def train(rank, gpu, args):
             if args.save_content:
                 if epoch % args.save_content_every == 0:
                     logger.info('Saving content.')
-                    content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
-                               'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
-                               'scheduler': scheduler.state_dict(),
-                               'modelD_dict': modelD.state_dict(), 'optimizerD': optimizerD.state_dict(),
-                               'schedulerD': schedulerD.state_dict()
-                               }
+                    if args.use_gan:
+                        content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
+                                'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                                'scheduler': scheduler.state_dict(),
+                                'modelD_dict': modelD.state_dict(), 'optimizerD': optimizerD.state_dict(),
+                                'schedulerD': schedulerD.state_dict()}
+                    else:
+                        content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
+                                'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                                'scheduler': scheduler.state_dict()}
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
@@ -383,26 +372,25 @@ if __name__ == '__main__':
     parser.add_argument('--resume', action='store_true',default=False)
     parser.add_argument('--model_ckpt', type=str, default=None,
                             help="Model ckpt to init from")
-
     parser.add_argument('--model_type', type=str, default="adm",
                             help='model_type', choices=['adm', 'ncsn++', 'ddpm++', 'DiT-B/2', 'DiT-L/2', 'DiT-L/4', 'DiT-XL/2'])
-    parser.add_argument('--image_size', type=int, default=32,
+    parser.add_argument('--image_size', type=int, default=256,
                             help='size of image')
     parser.add_argument('--f', type=int, default=8,
                             help='downsample rate of input image by the autoencoder')
     parser.add_argument('--scale_factor', type=float, default=0.18215,
                             help='size of image')
-    parser.add_argument('--num_in_channels', type=int, default=3,
+    parser.add_argument('--num_in_channels', type=int, default=4,
                             help='in channel image')
-    parser.add_argument('--num_out_channels', type=int, default=3,
+    parser.add_argument('--num_out_channels', type=int, default=4,
                             help='in channel image')
     parser.add_argument('--nf', type=int, default=256,
                             help='channel of model')
     parser.add_argument('--num_res_blocks', type=int, default=2,
                             help='number of resnet blocks per scale')
-    parser.add_argument('--attn_resolutions', nargs='+', type=int, default=(16,),
+    parser.add_argument('--attn_resolutions', nargs='+', type=int, default=(16,8),
                             help='resolution of applying attention')
-    parser.add_argument('--ch_mult', nargs='+', type=int, default=(1,1,2,2,4,4),
+    parser.add_argument('--ch_mult', nargs='+', type=int, default=(1,2,2,2),
                             help='channel mult')
     parser.add_argument('--dropout', type=float, default=0.,
                             help='drop-out rate')
@@ -417,68 +405,50 @@ if __name__ == '__main__':
 
     # Original ADM
     parser.add_argument('--layout', action='store_true')
-    parser.add_argument('--use_origin_adm', action='store_true')
+    parser.add_argument('--use_origin_adm', action='store_true', default=True)
     parser.add_argument("--use_scale_shift_norm", type=bool, default=True)
     parser.add_argument("--resblock_updown", type=bool, default=False)
     parser.add_argument("--use_new_attention_order", type=bool, default=False)
-    parser.add_argument('--centered', action='store_false', default=True,
-                            help='-1,1 scale')
+    parser.add_argument('--centered', action='store_false', default=True, help='-1,1 scale')
     parser.add_argument("--resamp_with_conv", type=bool, default=True)
-    parser.add_argument('--num_heads', type=int, default=4,
-                            help='number of head')
-    parser.add_argument('--num_head_upsample', type=int, default=-1,
-                            help='number of head upsample')
-    parser.add_argument('--num_head_channels', type=int, default=-1,
-                            help='number of head channels')
-
+    parser.add_argument('--num_heads', type=int, default=4, help='number of head')
+    parser.add_argument('--num_head_upsample', type=int, default=-1, help='number of head upsample')
+    parser.add_argument('--num_head_channels', type=int, default=-1, help='number of head channels')
     parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="stabilityai/sd-vae-ft-mse")
 
     # distill
-    parser.add_argument('--num_timesteps', type=int, default=200)
-    parser.add_argument('--discrete_timesteps', action='store_true', default=False)
-    parser.add_argument('--skip_step', type=int, default=0)
-    parser.add_argument('--fm_loss', action='store_true', default=False)
     parser.add_argument('--num_sample_timesteps', type=int, default=10)
 
     # discriminator
     parser.add_argument('--lrD', type=float, default=1e-4, help='learning rate d')
-    parser.add_argument('--d_base_channels', type=int, default=32768,
-                            help='number of discriminator base channels')
-    parser.add_argument('--r1_gamma', type=float,
-                        default=0.05, help='coef for r1 reg')
-    parser.add_argument('--lazy_reg', type=int, default=None,
-                        help='lazy regulariation.')
-    parser.add_argument('--d_temb_channels', type=int, default=None,
-                        help='number of discriminator temb channels')
+    parser.add_argument('--d_base_channels', type=int, default=16384, help='number of discriminator base channels')
+    parser.add_argument('--r1_gamma', type=float, default=1., help='coef for r1 reg')
+    parser.add_argument('--lazy_reg', type=int, default=None, help='lazy regulariation.')
+    parser.add_argument('--d_temb_channels', type=int, default=256, help='number of discriminator temb channels')
 
     # training
     parser.add_argument('--exp', default='experiment_cifar_default', help='name of experiment')
     parser.add_argument('--dataset', default='cifar10', help='name of dataset')
     parser.add_argument('--datadir', default='./data')
     parser.add_argument('--use_fp16', action='store_true', default=False)
-    parser.add_argument('--use_grad_checkpointing', action='store_true', default=False,
-        help="Enable gradient checkpointing for mem saving")
-
+    parser.add_argument('--use_grad_checkpointing', action='store_true', default=False, help="Enable gradient checkpointing for mem saving")
     parser.add_argument('--batch_size', type=int, default=128, help='input batch size')
     parser.add_argument('--num_epoch', type=int, default=1200)
-
-    parser.add_argument('--lr', type=float, default=5e-4, help='learning rate g')
-
-    parser.add_argument('--beta1', type=float, default=0.5,
-                            help='beta1 for adam')
-    parser.add_argument('--beta2', type=float, default=0.9,
-                            help='beta2 for adam')
+    parser.add_argument('--lr', type=float, default=2e-5, help='learning rate g')
+    parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam')
+    parser.add_argument('--beta2', type=float, default=0.9, help='beta2 for adam')
     parser.add_argument('--no_lr_decay',action='store_true', default=False)
-
-    parser.add_argument('--use_ema', action='store_true', default=False,
-                            help='use EMA or not')
+    parser.add_argument('--use_ema', action='store_true', default=False, help='use EMA or not')
     parser.add_argument('--ema_decay', type=float, default=0.9999, help='decay rate for EMA')
     parser.add_argument('--target_ema_decay', type=float, default=0.95, help='decay rate for target EMA model')
-    parser.add_argument('--faster_training',action='store_true', default=False)
+
+    # consistency + gan
     parser.add_argument('--init_threshold', type=float, default=0.2, help='training threshold')
-    
+    parser.add_argument('--warm_up_con', type=int, default=0, help='warm up consistency loss')
+    parser.add_argument('--use_gan', action='store_true', default=False)
+    parser.add_argument('--inner_skip', type=int, default=1)
 
-
+    # saving
     parser.add_argument('--save_content', action='store_true', default=False)
     parser.add_argument('--save_content_every', type=int, default=10, help='save content for resuming every x epochs')
     parser.add_argument('--save_ckpt_every', type=int, default=25, help='save ckpt every x epochs')

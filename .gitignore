@@ -16,3 +16,4 @@ stabilityai/
 *.log
 data/
 slurm_scripts/
+consistent_generated_samples/

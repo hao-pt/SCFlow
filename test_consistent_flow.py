@@ -112,7 +112,8 @@ def sample_and_test(rank, gpu, args):
     model = create_network(args).to(device)
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device)
 
-    ckpt = torch.load('./saved_info/cd_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    # ckpt = torch.load('./saved_info/cd_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    ckpt = torch.load('./saved_info/cd_flow/{}/{}/content.pth'.format(args.dataset, args.exp), map_location=device)["model_dict"]
     # ckpt = torch.load('./saved_info/cd_flow/{}/content.pth'.format(args.dataset))["model_dict"]
     print("Finish loading model")
     # loading weights from ddp in single gpu

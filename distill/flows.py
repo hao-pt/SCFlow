@@ -13,9 +13,6 @@ class BaseFlow():
 		self.N = num_steps
 		self.device = device
 
-	def get_train_tuple(self, z0=None, z1=None):
-		# return z_t, t, target
-		raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
 
 	@torch.no_grad()
 	def sample_ode(self, z0=None, N=None):
@@ -30,10 +27,7 @@ class BaseFlow():
 		traj.append(z.detach().clone())
 		for i in range(N):
 			t = torch.ones((batchsize,1), device=self.device) * i / N
-			if len(z0.shape) == 2:
-				pred = self.model(t, z)
-			elif len(z0.shape) == 4:
-				pred = self.model(t.squeeze(), z)
+			pred = self.model(t.squeeze(), z)
 			z = z.detach().clone() + pred * dt
 			traj.append(z.detach().clone())
 		return traj
@@ -57,22 +51,15 @@ class BaseFlow():
 		traj.append(z.detach().clone())
     
 		for i in tq(reversed(range(1,N+1))):
-      
 			t = torch.ones((batchsize,1), device=self.device) * i / N
 			t_next = torch.ones((batchsize,1), device=self.device) * (i-1) / N
-			if len(z1.shape) == 2:
-				if solver == 'heun':
-					raise NotImplementedError("Heun's method not implemented for 2D data.")
-				vt = self.model(t, z, **model_kwargs)
-			elif len(z1.shape) == 4:
-				vt = self.model(t.squeeze(), z, **model_kwargs)
-				if solver == 'heun' and i > 1:
-					z_next = z.detach().clone() + vt * dt
-					vt_next = self.model(t_next.squeeze(), z_next, **model_kwargs)
-					vt = (vt + vt_next) / 2
-				x0hat = z - vt * t.view(-1,1,1,1)
-				x0hat_list.append(x0hat)
-			
+			vt = self.model(t.squeeze(), z, **model_kwargs)
+			if solver == 'heun' and i > 1:
+				z_next = z.detach().clone() + vt * dt
+				vt_next = self.model(t_next.squeeze(), z_next, **model_kwargs)
+				vt = (vt + vt_next) / 2
+			x0hat = z - vt * t.view(-1,1,1,1)
+			x0hat_list.append(x0hat)
 			z = z.detach().clone() + vt * dt
 			traj.append(z.detach().clone())
 
@@ -96,10 +83,6 @@ class BaseFlow():
 		result = torch.from_numpy(solution.y[:,-1].reshape(dshape))
 		return result, nfe
 
-	def encode(self, z0, N=None):
-		traj = self.sample_ode(z0, N)
-		z1 = traj[-1]
-		return z1, 0, 0
 
 class RectifiedFlow(BaseFlow):
     def __init__(self, discrete=False, **kwargs):
@@ -146,88 +129,43 @@ class RectifiedFlow(BaseFlow):
 
 
 class ConsistencyFlow(RectifiedFlow):
-    def __init__(self, device, model, ema_model, threshold, pretrained_model=None, num_steps=1000, TN=16, skip=1, discrete=False):
+    def __init__(self, device, model, ema_model, threshold, pretrained_model=None):
         self.ema_model = ema_model
         self.pretrained_model = pretrained_model # copy.deepcopy(model.module)
-        self.discrete = discrete
         self.model = model
-        self.N = num_steps
-        self.TN = TN
-        self.skip = 1
         self.device = device
         self.threshold = threshold
-    
-    def get_train_tuple_flow(self, z0=None, z1=None, t = None, eps=1e-5, model_kwargs={}, return_pred_z0=False):
-        if t is None:
-            if self.discrete:
-                t = torch.randint(1,self.TN+1,(z0.shape[0],)).to(z1.device).float()/self.TN
-            else:
-                t = torch.rand((z1.shape[0], 1), device=self.device)
-                t = t * (1 - eps) + eps
 
-        if len(z1.shape) == 2:
-            z_t =  t * z1 + (1.-t) * z0
-        elif len(z1.shape) == 4:
-            t = t.view(-1, 1, 1, 1)
-            z_t =  t * z1 + (1.-t) * z0
-            t = t.view(-1)
-        else:
-            raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
-        target = z1 - z0
-        v = self.model(t, z_t, **model_kwargs)
-        if return_pred_z0:
-          shape = [t.size(0)] + [1] * (len(v.shape) - 1)
-          pred_z0 = z_t - t.reshape(*shape) * v
-          return v, t, target, pred_z0
-        return v, t, target
-
-    def get_train_tuple(self, z0=None, z1=None, t=None, eps=1e-5, model_kwargs={}, return_pred_z0=False):
-        if t is None:
-            if self.discrete:
-                t = torch.randint(1, self.TN+1, (z0.shape[0],)).to(z1.device).float() / self.TN
-            else:
-                t = ((1-1/self.TN)*torch.rand((z0.shape[0],)) + 1/self.TN).to(z1.device).float()
-                     
-        if len(z1.shape) == 2:
-            zt = t * z1 + (1. - t) * z0
-        elif len(z1.shape) == 4:
-            t = t.view(-1, 1, 1, 1)
-            zt = t * z1 + (1. - t) * z0
-            t = t.squeeze()
-        else:
-            raise NotImplementedError(f"get_train_tuple not implemented for {self.__class__.__name__}.")
-        
+    def get_train_tuple(self, z0=None, z1=None, t=None, eps=1e-5, model_kwargs={}):                     
+        t = t.view(-1, 1, 1, 1)
+        zt = t * z1 + (1. - t) * z0
+        t = t.squeeze()
         gt_flow = z1 - z0
         # local consistency
         t_down = copy.deepcopy(t)
-        t_up = 1 - t
         t_down[t_down >= self.threshold] = self.threshold
-        t_up[t_up >= self.threshold] = self.threshold
         delta_t_down = (torch.rand_like(t)*t_down).to(t.device)
-        delta_t_up = (torch.rand_like(t)*t_up).to(t.device)
         post_t = t - delta_t_down
-        prev_t = t + delta_t_up
         if self.pretrained_model is not None:
             with torch.no_grad():
                 teacher_vt = self.pretrained_model(t, zt, y=model_kwargs.get("y", None))
                 post_zt = zt - delta_t_down.view(-1, 1, 1, 1) * teacher_vt
-                # prev_zt = zt + delta_t_up.view(-1, 1, 1, 1) * teacher_vt
-                # which model should be used, if model is used, sound reasonable
-                # post_zt = prev_zt - (delta_t_up + delta_t_down).view(-1, 1, 1, 1) * self.ema_model(prev_t, prev_zt, y=model_kwargs.get("y", None))
         else:
-            post_zt = zt - delta_t_down * (z1 - z0)
-            prev_zt = zt - delta_t_up * (z1 - z0)
+            post_zt = zt - delta_t_down.view(-1, 1, 1, 1) * (z1 - z0)        
         
-    
         curr_vt = self.model(t, zt, **model_kwargs)
+        curr_z0 = zt - t.view(-1, 1, 1, 1) * curr_vt
         with torch.no_grad():
+            # consistency post_t            
             post_vt = self.ema_model(post_t, post_zt, **model_kwargs).detach()
-            # prev_vt = self.ema_model(prev_t, prev_zt, **model_kwargs).detach()
-        if return_pred_z0:
-          curr_z0 = zt - t.view(-1, 1, 1, 1) * curr_vt
-          post_z0 = post_zt - post_t.view(-1, 1, 1, 1) * post_vt
-        #   prev_z0 = prev_zt - prev_t.view(-1, 1, 1, 1) * prev_vt
-          # song technique
-          post_z0[post_t<0.2] = z0[post_t<0.2]
-          return curr_vt, post_vt, gt_flow, curr_z0, post_z0
-        return curr_vt, post_vt, gt_flow
+            post_z0 = post_zt - post_t.view(-1, 1, 1, 1) * post_vt
+            # reflow: predict z0 directly from z1
+            reflow_v1 = self.model(torch.ones_like(t), z1)
+            reflow_z0 = z1 - reflow_v1
+        # compute reflow intermidiate state
+        reflow_zt =  t.view(-1, 1, 1, 1) * reflow_z0.detach() + (1 - t).view(-1, 1, 1, 1) * z1
+        reflow_vt = self.model(t, reflow_zt, **model_kwargs)
+        reflow_z0_rescon = reflow_zt - t.view(-1, 1, 1, 1)*reflow_vt
+        # song technique to truncate
+        post_z0[post_t<0.2] = z0[post_t<0.2]
+        return curr_vt, post_vt, gt_flow, curr_z0, post_z0, reflow_z0_rescon, reflow_z0
