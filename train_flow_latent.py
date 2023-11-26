@@ -128,7 +128,6 @@ def train(rank, gpu, args):
     #ddp
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=False)
 
-
     if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
         checkpoint = torch.load(checkpoint_file, map_location=device)
@@ -157,6 +156,9 @@ def train(rank, gpu, args):
         del checkpoint
     else:
         global_step, epoch, init_epoch = 0, 0, 0
+
+    if args.compile:
+        model = torch.compile(model)
 
     use_label = True if "imagenet" in args.dataset else False
     is_latent_data = True if "latent" in args.dataset else False
@@ -230,8 +232,7 @@ def train(rank, gpu, args):
                 torch.save(model.state_dict(), os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
                 if args.use_ema:
                     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-                torch.save(model.state_dict(), os.path.join(exp_path, 'model_ema{}.pth'.format(epoch)))
-                if args.use_ema:
+                    torch.save(model.state_dict(), os.path.join(exp_path, 'model_ema{}.pth'.format(epoch)))
                     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
 
@@ -319,6 +320,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_fp16', action='store_true', default=False)
     parser.add_argument('--use_grad_checkpointing', action='store_true', default=False,
         help="Enable gradient checkpointing for mem saving")
+    parser.add_argument('--compile', action='store_true', default=False)
 
     parser.add_argument('--batch_size', type=int, default=128, help='input batch size')
     parser.add_argument('--num_epoch', type=int, default=1200)

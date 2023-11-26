@@ -17,7 +17,7 @@
 set -x
 set -e
 
-export MASTER_PORT=10008
+export MASTER_PORT=9008
 export WORLD_SIZE=1
 
 export SLURM_JOB_NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ' ')
@@ -37,17 +37,22 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 
 ############################################### ADM ~ CelebA 256 ###############################################
 # --multi_gpu 
-accelerate launch --num_processes 1 --main_process_port 28500 train_consistent_flow_faster.py --exp celeba_f8_lr2e-5_10steps_ema0.95 \
+CUDA_VISIBLE_DEVICES=0 python train_consistent_flow.py --exp celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20 \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-    --batch_size 96 --num_epoch 500 \
+    --batch_size 64 --num_epoch 600 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-    --nf 192 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 3 \
+    --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
     --use_origin_adm \
-    --num_head_channels 64 \
     --lr 2e-5 --scale_factor 0.18215 \
-    --num_timesteps 10 \
-    --target_ema_decay 0.95 \
+    --num_timesteps 100 --discrete_timesteps \
+    --target_ema_decay 0. \
     --save_content --save_content_every 10 \
+    --master_port $MASTER_PORT --num_process_per_node 1 \
+    --skip_step 20 \
+    --fm_loss \
+    --num_sample_timesteps 8 \
+    --no_lr_decay \
+    # --num_head_channels 64 \
     # --no_lr_decay 
     # --discrete_timesteps \
     # --augment 0.15 \

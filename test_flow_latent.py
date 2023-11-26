@@ -143,6 +143,7 @@ def sample_and_test(rank, gpu, args):
     #loading weights from ddp in single gpu
     for key in list(ckpt.keys()):
         ckpt[key[7:]] = ckpt.pop(key)
+        # ckpt[key[17:]] = ckpt.pop(key)
     model.load_state_dict(ckpt, strict=True)
     model.eval()
 
@@ -155,6 +156,8 @@ def sample_and_test(rank, gpu, args):
     # save_dir = "./generated_samples/{}".format(args.dataset)
     if args.method in FIXER_SOLVER:
         save_dir += "_s{}".format(args.num_steps)
+    if args.num_classes:
+        save_dir += "_cfg{}".format(args.cfg_scale)
 
     if rank == 0 and not os.path.exists(save_dir):
         os.makedirs(save_dir)

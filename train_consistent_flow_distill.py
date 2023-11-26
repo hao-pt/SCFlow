@@ -168,7 +168,6 @@ def train(rank, gpu, args):
     model = create_network(args).to(device, dtype=dtype)
     if args.use_grad_checkpointing and "DiT" in args.model_type:
         model.set_gradient_checkpointing()
-    target_ema = EMAMODEL(model)  # Create an EMA of the model for use after training
 
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device, dtype=dtype)
     first_stage_model = first_stage_model.eval()
@@ -234,6 +233,7 @@ def train(rank, gpu, args):
     else:
         global_step, epoch, init_epoch = 0, 0, 0
     
+    target_ema = EMAMODEL(model)  # Create an EMA of the model for use after training
     loss_fn = PseudoHuberLoss(c=args.c) if args.huber_loss else nn.MSELoss()
     flow = ConsistencyFlow(device, model=model, ema_model=target_ema, pretrained_model=teacher, 
         TN=args.num_timesteps, discrete=args.discrete_timesteps, skip=args.skip_step)
@@ -255,34 +255,40 @@ def train(rank, gpu, args):
             model_kwargs = {"y": y}
             gan_lamb = 0. if global_step < args.gan_warmup_iters else 1.
 
-            z_t, t, gt_flow, pred_z0 = flow.get_train_tuple_flow(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
-            for p in modelD.parameters():
-                p.requires_grad = True
-            modelD.zero_grad()
+            if not args.disable_gan:
+                z_t, t, gt_flow, pred_z0 = flow.get_train_tuple_flow(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
+                for p in modelD.parameters():
+                    p.requires_grad = True
+                modelD.zero_grad()
 
-            Dreal = modelD(z_0, c=y)
-            Dreal_loss = F.softplus(-Dreal).mean()
+                Dreal = modelD(z_0, c=y)
+                Dreal_loss = F.softplus(-Dreal).mean()
 
-            grad_real = 0.
-            if args.lazy_reg is None:
-                grad_real = grad_penalty_call(args, Dreal, z_0)
-            else:
-                if global_step % args.lazy_reg == 0:
+                grad_real = 0.
+                if args.lazy_reg is None:
                     grad_real = grad_penalty_call(args, Dreal, z_0)
-            
-            Dfake = modelD(pred_z0, c=y)
-            Dfake_loss = F.softplus(Dfake).mean()
-            Dloss = (Dreal_loss + grad_real + Dfake_loss) # * gan_lamb
-            Dloss.backward()
-            optimizerD.step()
+                else:
+                    if global_step % args.lazy_reg == 0:
+                        grad_real = grad_penalty_call(args, Dreal, z_0)
+                
+                Dfake = modelD(pred_z0, c=y)
+                Dfake_loss = F.softplus(Dfake).mean()
+                Dloss = (Dreal_loss + grad_real + Dfake_loss) # * gan_lamb
+                Dloss.backward()
+                optimizerD.step()
+            else:
+                Dloss = 0.
 
             v_pred, v_target, gt_flow, pred_z0, gt_z0 = flow.get_train_tuple(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
-            for p in modelD.parameters():
-                p.requires_grad = False
             model.zero_grad()
+            if not args.disable_gan:
+                for p in modelD.parameters():
+                    p.requires_grad = False
 
-            out = modelD(pred_z0, c=y)
-            Gloss = F.softplus(-out).mean()
+                out = modelD(pred_z0, c=y)
+                Gloss = F.softplus(-out).mean()
+            else:
+                Gloss = 0.
 
             fm_loss = 0. if not args.fm_loss else loss_fn(z_0, pred_z0)
             con_loss = loss_fn(pred_z0, gt_z0)
@@ -305,8 +311,8 @@ def train(rank, gpu, args):
                         loss.item(), 
                         0. if not args.fm_loss else fm_loss.item(), 
                         con_loss.item(), 
-                        Gloss.item(),
-                        Dloss.item(),
+                        Gloss if args.disable_gan else Gloss.item(),
+                        Dloss if args.disable_gan else Dloss.item(),
                         steps_per_sec))
                     start_time = time()
 
@@ -339,9 +345,12 @@ def train(rank, gpu, args):
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
                                'scheduler': scheduler.state_dict(),
-                               'modelD_dict': modelD.state_dict(), 'optimizerD': optimizerD.state_dict(),
-                               'schedulerD': schedulerD.state_dict()
                                }
+                    if not args.disable_gan:
+                        content.update({
+                           'modelD_dict': modelD.state_dict(), 'optimizerD': optimizerD.state_dict(),
+                           'schedulerD': schedulerD.state_dict()
+                        })
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
@@ -455,6 +464,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_fp16', action='store_true', default=False)
     parser.add_argument('--use_grad_checkpointing', action='store_true', default=False,
         help="Enable gradient checkpointing for mem saving")
+    parser.add_argument('--disable_gan', action='store_true', default=False)
 
     parser.add_argument('--batch_size', type=int, default=128, help='input batch size')
     parser.add_argument('--num_epoch', type=int, default=1200)

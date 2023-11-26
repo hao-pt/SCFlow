@@ -10,12 +10,12 @@ import shutil
 import argparse
 from functools import partial
 from omegaconf import OmegaConf
+from time import time
+import logging
+import copy
 
 import numpy as np
 import torch
-# faster training
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
 from torchdiffeq import odeint_adjoint as odeint
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,9 +26,10 @@ from torch.multiprocessing import Process
 
 from datasets_prep import get_dataset
 from models import create_network
-from EMA import EMA
+from EMA import EMA, EMAMODEL
 
 from sampler.karras_sample import karras_sample
+from distill.flows import ConsistencyFlow
 
 
 def copy_source(file, output_dir):
@@ -103,6 +104,10 @@ def requires_grad(model, flag=True):
 #%%
 def train(rank, gpu, args):
     from diffusers.models import AutoencoderKL
+    if args.faster_training:
+        # faster training
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     torch.manual_seed(args.seed + rank)
     torch.cuda.manual_seed(args.seed + rank)
     torch.cuda.manual_seed_all(args.seed + rank)
@@ -110,8 +115,31 @@ def train(rank, gpu, args):
     device = torch.device('cuda:{}'.format(gpu))
     dtype = torch.bfloat16 if args.use_bf16 else torch.float32
 
-    batch_size = args.batch_size
+    exp = args.exp
+    parent_dir = "./saved_info/ct_flow/{}".format(args.dataset)
+    exp_path = os.path.join(parent_dir, exp)
+    if rank == 0:
+        if not os.path.exists(exp_path):
+            os.makedirs(exp_path)
+            config_dict = vars(args)
+            OmegaConf.save(config_dict, os.path.join(exp_path, "config.yaml"))
 
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+        logging.basicConfig(
+            format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+            datefmt="%m/%d/%Y %H:%M:%S",
+            level=logging.INFO,
+            handlers=[
+                logging.StreamHandler(), 
+                logging.FileHandler(f"{exp_path}/log.txt")]
+        )
+        # Creating an object
+        logger = logging.getLogger(__name__)
+        logger.setLevel(logging.INFO)
+        logger.info(f"Exp path: {exp_path}")
+
+    batch_size = args.batch_size
     dataset = get_dataset(args)
     train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
                                                                     num_replicas=args.world_size,
@@ -127,8 +155,6 @@ def train(rank, gpu, args):
     model = create_network(args).to(device, dtype=dtype)
     if args.use_grad_checkpointing and "DiT" in args.model_type:
         model.set_gradient_checkpointing()
-    ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
-    requires_grad(ema, False)
 
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device, dtype=dtype)
     first_stage_model = first_stage_model.eval()
@@ -136,8 +162,9 @@ def train(rank, gpu, args):
     for param in first_stage_model.parameters():
         param.requires_grad = False
 
-    print('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
-    print('FM size: {:.3f}MB'.format(get_weight(model)))
+    if rank == 0:
+        logger.info('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
+        logger.info('FM size: {:.3f}MB'.format(get_weight(model)))
 
     broadcast_params(model.parameters())
 
@@ -150,20 +177,7 @@ def train(rank, gpu, args):
 
     #ddp
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=False)
-    update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()  # important! This enables embedding dropout for classifier-free guidance
-    ema.eval()  # EMA model should always be in eval mode
-
-    exp = args.exp
-    parent_dir = "./saved_info/latent_flow/{}".format(args.dataset)
-
-    exp_path = os.path.join(parent_dir, exp)
-    if rank == 0:
-        if not os.path.exists(exp_path):
-            os.makedirs(exp_path)
-            config_dict = vars(args)
-            OmegaConf.save(config_dict, os.path.join(exp_path, "config.yaml"))
-    print("Exp path:", exp_path)
 
     if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
@@ -176,8 +190,9 @@ def train(rank, gpu, args):
         scheduler.load_state_dict(checkpoint['scheduler'])
         global_step = checkpoint["global_step"]
 
-        print("=> resume checkpoint (epoch {})"
-                  .format(checkpoint['epoch']))
+        if rank == 0:
+            logger.info("=> resume checkpoint (epoch {})"
+                    .format(checkpoint['epoch']))
         del checkpoint
 
     elif args.model_ckpt and os.path.exists(os.path.join(exp_path, args.model_ckpt)):
@@ -188,12 +203,19 @@ def train(rank, gpu, args):
         model.load_state_dict(checkpoint)
         global_step = 0
 
-        print("=> loaded checkpoint (epoch {})"
-                  .format(epoch))
+        if rank == 0:
+            logger.info("=> resume checkpoint (epoch {})"
+                    .format(checkpoint['epoch']))
         del checkpoint
     else:
         global_step, epoch, init_epoch = 0, 0, 0
 
+    # ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
+    # requires_grad(ema, False)
+    ema = EMAMODEL(model)
+    target_ema = EMAMODEL(model)  # Create an EMA of the model for flow
+    flow = ConsistencyFlow(device, model=model, ema_model=target_ema, pretrained_model=None, 
+        TN=args.num_timesteps, discrete=args.discrete_timesteps, skip=args.skip_step)
     use_label = True if "imagenet" in args.dataset else False
     is_latent_data = True if "latent" in args.dataset else False
     start_time = time()
@@ -208,26 +230,21 @@ def train(rank, gpu, args):
                 z_0 = x_0 * args.scale_factor
             else:
                 z_0 = first_stage_model.encode(x_0).latent_dist.sample().mul_(args.scale_factor)
-            #sample t
-            t = torch.rand((z_0.size(0),), dtype=dtype, device=device)
-            t = t.view(-1, 1, 1, 1)
+            z_0.requires_grad = True
             z_1 = torch.randn_like(z_0)
-            # corrected notation: 1 is real noise, 0 is real data
-            v_t = (1 - t) * z_0 + (1e-5 + (1 - 1e-5) * t) * z_1
-            u = (1 - 1e-5) * z_1 - z_0
-            # alternative notation (similar to flow matching): 1 is data, 0 is real noise
-            # v_t = (1 - (1 - 1e-5) * t) * z_0 + t * z_1
-            # u = z_1 - (1 - 1e-5) * z_0
-            v = model(t.squeeze(), v_t, y)
-            fm_loss = F.mse_loss(v, u) 
+            model_kwargs = {"y": y}
 
-            v_target = ema(t.squeeze(), v_t, y)
-            con_loss = F.mse_loss(v, v_target)
+            v_pred, v_target, gt_flow, pred_z0, gt_z0 = flow.get_train_tuple(z_0, z_1, model_kwargs=model_kwargs, return_pred_z0=True)
 
+            fm_loss = 0. if not args.fm_loss else F.mse_loss(z_0, pred_z0)
+            con_loss = F.mse_loss(pred_z0, gt_z0)
             loss = fm_loss + con_loss
             loss.backward()
             optimizer.step()
-            update_ema(ema, model.module)
+
+            # update ema target
+            flow.ema_model.ema_step(args.target_ema_decay, flow.model)
+            ema.ema_step(args.ema_decay, flow.model)
 
             global_step += 1
             if iteration % 100 == 0:
@@ -235,7 +252,7 @@ def train(rank, gpu, args):
                     # Measure training speed:
                     end_time = time()
                     steps_per_sec = 100 / (end_time - start_time)
-                    print('epoch {} iteration{}, Loss: {}, FMLoss: {}, CONLoss: {}, Train Steps/Sec: {:.2f}'.format(epoch,iteration, loss.item(), fm_loss.item(), con_loss.item(), steps_per_sec))
+                    logger.info('epoch {} iteration{}, Loss: {}, FMLoss: {}, CONLoss: {}, Train Steps/Sec: {:.2f}'.format(epoch,iteration, loss.item(), fm_loss.item(), con_loss.item(), steps_per_sec))
                     start_time = time()
 
         if not args.no_lr_decay:
@@ -249,32 +266,27 @@ def train(rank, gpu, args):
                     if y is not None:
                         y = y[:4]
                     sample_model = partial(model, y=y)
-                    # sample_func = lambda t, x: model(t, x, y=y)
-                    fake_sample = sample_from_model(sample_model, rand)[-1]
-                    fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
+                    traj, x0_list = flow.sample_ode_generative_stochastic(rand, args.num_sample_timesteps)
+                    fake_image = traj[-1]
+                    fake_image = first_stage_model.decode(fake_image / args.scale_factor).sample
                 # torchvision.utils.save_image(fake_sample, os.path.join(exp_path, 'sample_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
                 torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}.png'.format(epoch)), normalize=True, value_range=(-1, 1))
-                print("Finish sampling")
+                logger.info("Finish sampling")
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
-                    print('Saving content.')
+                    logger.info('Saving content.')
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
-                               'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                               'model_dict': flow.model.state_dict(), 'optimizer': optimizer.state_dict(),
                                'scheduler': scheduler.state_dict(),
-                               'ema_model_dict': ema.state_dict(),
                                }
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
-                # if args.use_ema:
-                #     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
                 torch.save({
-                    "model": model.state_dict(), 
-                    "ema_model": ema.state_dict(),
+                    "model": flow.model.state_dict(), 
+                    "ema_model": ema.ema_model.state_dict(),
                 }, os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
-                # if args.use_ema:
-                #     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
 
 
@@ -357,7 +369,6 @@ if __name__ == '__main__':
     parser.add_argument('--exp', default='experiment_cifar_default', help='name of experiment')
     parser.add_argument('--dataset', default='cifar10', help='name of dataset')
     parser.add_argument('--datadir', default='./data')
-    parser.add_argument('--num_timesteps', type=int, default=200)
     parser.add_argument('--use_bf16', action='store_true', default=False)
     parser.add_argument('--use_grad_checkpointing', action='store_true', default=False,
         help="Enable gradient checkpointing for mem saving")
@@ -376,6 +387,15 @@ if __name__ == '__main__':
     parser.add_argument('--use_ema', action='store_true', default=False,
                             help='use EMA or not')
     parser.add_argument('--ema_decay', type=float, default=0.9999, help='decay rate for EMA')
+    parser.add_argument('--faster_training',action='store_true', default=False)
+
+    # consistency
+    parser.add_argument('--num_timesteps', type=int, default=200)
+    parser.add_argument('--discrete_timesteps', action='store_true', default=False)
+    parser.add_argument('--skip_step', type=int, default=0)
+    parser.add_argument('--fm_loss', action='store_true', default=False)
+    parser.add_argument('--num_sample_timesteps', type=int, default=10)
+    parser.add_argument('--target_ema_decay', type=float, default=0.95, help='decay rate for target EMA model')
 
 
     parser.add_argument('--save_content', action='store_true', default=False)

@@ -1,4 +1,4 @@
-!/bin/sh
+#!/bin/sh
 #SBATCH --job-name=distill # create a short name for your job
 #SBATCH --output=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.out # create a output file
 #SBATCH --error=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.err # create a error file
@@ -17,7 +17,7 @@
 set -x
 set -e
 
-export MASTER_PORT=10013
+export MASTER_PORT=10018
 export WORLD_SIZE=1
 
 export SLURM_JOB_NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ' ')
@@ -35,23 +35,26 @@ export PYTHONFAULTHANDLER=1
 
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
+# source /etc/profile.d/lmod.sh
+# module use /sw/modules/all
+# 
 # module purge
 # module load python/miniconda3/miniconda3
 # eval "$(conda shell.bash hook)"
-# conda activate ../envs/flow_pytorch2/
+# conda activate ../envs/flow1.8.1/
 
 
 ############################################### ADM ~ CelebA 256 ###############################################
 # --multi_gpu 
-CUDA_VISIBLE_DEVICES=0 python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan_pseudohuber0.01 \
+CUDA_VISIBLE_DEVICES=0 python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1 \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
-    --batch_size 64 --num_epoch 300 \
+    --batch_size 64 --num_epoch 200 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
     --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
     --use_origin_adm \
     --lr 2e-5 --scale_factor 0.18215 \
     --num_timesteps 100 \
-    --target_ema_decay 0. \
+    --target_ema_decay 0.95 \
     --save_content --save_content_every 10 \
     --discrete_timesteps \
     --master_port $MASTER_PORT --num_process_per_node 1 \
@@ -62,7 +65,8 @@ CUDA_VISIBLE_DEVICES=0 python train_consistent_flow_distill.py --exp celeba_f8_a
     --lrD 1e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
     --num_sample_timesteps 2 \
     --no_lr_decay \
-    --huber_loss --c 0.01 \
+    --huber_loss --c 0.1 \
+    # --disable_gan \
     # --resume 
     # --gan_warmup_iters 15_000 \
     # --save_ckpt_every 5 \

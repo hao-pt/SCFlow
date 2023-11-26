@@ -50,30 +50,33 @@ CUDA_VISIBLE_DEVICES={device} python test_consistent_flow.py --exp $EXP \
         --master_port $MASTER_PORT --num_process_per_node {num_gpus} \
         --use_karras_samplers \
         --method $METHOD --num_steps $STEPS \
-        --stochastic --beta {beta} \
+        --use_origin_adm \
         --compute_fid --output_log $OUTPUT_LOG \
-        --model_type DiT-L/2 --num_classes 1 --label_dropout 0. --faster_test \
-        # --use_origin_adm \
+        --exp_root_dir {exp_root_dir} \
+        --stochastic --beta {beta} \
         # --num_head_channels 32 \
+        # --model_type DiT-L/2 --num_classes 1 --label_dropout 0. --faster_test \
         # --measure_time \
         # --compute_nfe \
 
 """
 
 ###### ARGS
-model_type = ["DiT-L/2", "adm"][0]
+model_type = ["DiT-L/2", "adm"][1]
 dataset = ["celeba_256", "ffhq_256"][0]
-exp = "celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_songbound0.2_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher" # # "celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher"  "celeba_f8_adm_lr2e-5_100steps_ema0.9_fmloss_skip30_gan_skipteacher"
-BASE_PORT = 8022
-num_gpus = 2
-device = "0,2" #,2,3,4,5,6,7"
+exp = "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1" # "celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_notrunct_huber0.01" # ["celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_notrunct_huber0.01", "celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan_notrunct", "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct", "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher"][-1]
+# "con_fm" #  "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip1_gan" # ""celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan" # "celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_songbound0.2_warmup15k" # "# "celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher"  "celeba_f8_adm_lr2e-5_100steps_ema0.9_fmloss_skip30_gan_skipteacher"
+exp_root_dir = ["ct_flow", "cd_flow"][1]
+BASE_PORT = 8026
+num_gpus = 1
+device = "0" #,2,3,4,5,6,7"
 
 config = pd.DataFrame({
-    "epochs": [200]*4,
-    "num_steps": [2,4,8,16],
-    "methods": ['euler']*4,
-    "cfg_scale": [1]*4,
-    "beta": [0.]*4
+    "epochs": [200]*6,
+    "num_steps": [1,2,4,8,16,24],
+    "methods": ['euler']*6,
+    "cfg_scale": [1]*6,
+    "beta": [0.]*6
 })
 print(config)
 
@@ -87,11 +90,13 @@ job_name = "test"
 for idx, row in config.iterrows():
     # device = str(idx % 2)
     # slurm_file_path = f"/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurm_scripts/{exp}/run{device}.sh"
+    os.makedirs(slurm_output, exist_ok=True)
     slurm_command = slurm_template.format(
         job_name=job_name,
         model_type=model_type,
         dataset=dataset,
         exp=exp,
+        exp_root_dir=exp_root_dir,
         epoch=row.epochs,
         master_port=str(BASE_PORT+idx),
         slurm_output=slurm_output,
