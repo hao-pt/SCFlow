@@ -30,8 +30,48 @@ from sampler.karras_sample import karras_sample
 from distill.flows import ConsistencyFlow
 
 
+class LossRecord:
+    def __init__(self, register_key = ["fm_losses", "con_losses", "rf_losses"]):
+        self.times = np.array([])
+        self.register_key = register_key
+        self.losses = {}
+        for key in register_key:
+            self.losses[key] = np.array([])
+        
+    def reset(self):
+        self.times = np.array([])
+        for key in self.register_key:
+            self.losses[key] = np.array([])
+    
+    def plot(self, save_path):
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(20, 5))
+        order = np.argsort(self.times)
+        for key in self.register_key:
+            plt.plot(self.times[order], self.losses[key][order], label=key)
+        plt.xlabel("times") 
+        plt.ylabel("losses")
+        plt.yscale("log")
+        plt.legend(loc="lower left")
+        plt.savefig(save_path)
+        
+    def add(self, t, track_loss):
+        from copy import deepcopy
+        # t = deepcopy(t)
+        # track_loss = deepcopy(track_loss)
+        t = t.detach().cpu().numpy()
+        t = t.squeeze()
+        for key in self.register_key:
+            self.losses[key] = np.concatenate((self.losses[key], track_loss[key].detach().squeeze().cpu().numpy())) 
+        self.times = np.concatenate((self.times, t))
+        
+def batch_mse(input, target):
+    return torch.mean((input - target)**2, dim=(1,2,3))
+        
+
 def huber_loss(x, y, c = 0.01):
-    return torch.sqrt(F.mse_loss(x, y) + c**2) - c
+    c = torch.tensor(c, device=x.device)
+    return torch.sqrt(batch_mse(x, y) + c**2) - c
 
 def grad_penalty_call(args, D_real, x_t):
     grad_real = torch.autograd.grad(
@@ -128,7 +168,7 @@ def train(rank, gpu, args):
         model.set_gradient_checkpointing()
     
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device, dtype=dtype)
-    first_stage_model = torch.compile(first_stage_model, mode="max-autotune")
+    # first_stage_model = torch.compile(first_stage_model, mode="max-autotune")
     first_stage_model = first_stage_model.eval()
     first_stage_model.train = False
     for param in first_stage_model.parameters():
@@ -189,18 +229,26 @@ def train(rank, gpu, args):
     teacher.eval()
     target_ema = EMAMODEL(model)
     model_ = model
-    model_ = torch.compile(model)
+    # model_ = torch.compile(model)
     
     flow = ConsistencyFlow(device, 
                             model=model_, 
                             ema_model=target_ema, 
-                            threshold=args.init_threshold, 
+                            threshold=args.init_threshold,
+                            trunc_threshold=args.trunc_threshold, 
                             pretrained_model=teacher)
     use_label = True if "imagenet" in args.dataset else False
+    register_key=["flow_loss", "con_loss", "reflow_loss"]
+    loss_record = LossRecord(register_key=register_key)
+    record_path = os.path.join(exp_path, "record")
+    if rank == 0:
+        if not os.path.exists(record_path):
+            os.makedirs(record_path)
     start_time = time()
     for epoch in range(init_epoch, args.num_epoch+1):
         train_sampler.set_epoch(epoch)
-
+        # reset record
+        loss_record.reset()
         for iteration, (x, y) in enumerate(tqdm(data_loader)):
             x0 = x.to(device, dtype=dtype, non_blocking=True)
             y = None if not use_label else y.to(device, non_blocking=True)
@@ -211,7 +259,7 @@ def train(rank, gpu, args):
             z1 = torch.randn_like(z0)
             t = torch.rand((z1.shape[0], 1), device=device).float()
             model_kwargs = {}
-            _, _, _, curr_z0, post_z0, reflow_z0_rescon, reflow_z0 = flow.get_train_tuple(z0, 
+            curr_vt, _, _, gt_flow, curr_z0, post_z0, prev_z0, reflow_z0_rescon, reflow_z0 = flow.get_train_tuple(z0, 
                                                                                         z1, 
                                                                                         t=t, 
                                                                                         model_kwargs=model_kwargs)
@@ -230,7 +278,9 @@ def train(rank, gpu, args):
                 else:
                     if global_step % args.lazy_reg == 0:
                         grad_real = grad_penalty_call(args, Dreal, z0)
-                Dfake = modelD_(curr_z0.detach().requires_grad_(), c=y) + modelD_(reflow_z0_rescon.detach().requires_grad_(), c=y)
+                # Dfake = modelD_(curr_z0.detach().requires_grad_(), c=y)# + modelD_(reflow_z0_rescon.detach().requires_grad_(), c=y)
+                # Dfake = modelD_(reflow_z0_rescon.detach().requires_grad_(), c=y)
+                Dfake = modelD_(reflow_z0.detach().requires_grad_(), c=y)
                 Dfake_loss = F.softplus(Dfake).mean()
                 Dloss = Dreal_loss + Dfake_loss + grad_real
                 Dloss.backward()
@@ -240,39 +290,68 @@ def train(rank, gpu, args):
                     p.requires_grad = False
                 optimizer.zero_grad()
                 # compute D loss
-                out = modelD_(curr_z0, c=y) + modelD_(reflow_z0_rescon, c=y)
+                # out = modelD_(curr_z0, c=y) #+ modelD_(reflow_z0_rescon, c=y)
+                # out = modelD_(reflow_z0_rescon, c=y)
+                out = modelD_(reflow_z0, c=y)
                 Gloss = F.softplus(-out).mean()
             else:
                 optimizer.zero_grad()
-
+            # setup to record losses
+            my_vars = locals()
+            loss_dict = {}
+            
             # consistenncy + reflow
             if args.model_ckpt:
                 if global_step < args.warm_up_con:
-                    con_loss = F.mse_loss(curr_z0, post_z0)
-                    loss = con_loss
-                    reflow_loss = torch.tensor(0.)
+                    con_loss = huber_loss(curr_z0, post_z0)
+                    loss = con_loss.mean()
+                    reflow_loss = torch.zeros_like(t)
                 else:
-                    reflow_loss = F.mse_loss(reflow_z0_rescon, reflow_z0.detach()) #+ F.mse_loss(pred_z0, z_0) + F.mse_loss(pred_z0_, z_0)
+                    reflow_loss = batch_mse(reflow_z0_rescon, reflow_z0.detach()) #+ F.mse_loss(pred_z0, z_0) + F.mse_loss(pred_z0_, z_0)
                     # update inner loop
                     if global_step % args.inner_skip == 0:
-                        con_loss = F.mse_loss(curr_z0, post_z0)
-                        loss = reflow_loss + con_loss
+                        con_loss = huber_loss(curr_z0, post_z0)
+                        loss = 0.1*reflow_loss.mean() + con_loss.mean()
                     else:
-                        loss = reflow_loss
+                        loss = reflow_loss.mean()
                     # gan loss
-                    if args.use_gan:
-                        loss += Gloss
+                if global_step > args.warm_up_gan and args.use_gan:
+                    loss += 0.1*Gloss
+                if global_step > args.warm_up_inverse:
+                    prev_con = huber_loss(curr_z0, prev_z0)
+                    loss += 0.1*prev_con.mean()
             else:
-                con_loss = F.mse_loss(curr_z0, post_z0)
-                flow_loss = F.mse(curr_z0, z0)
-                loss = con_loss + flow_loss
+                # consider using reflow loss to ensure consistency ?????
+                flow_loss = batch_mse(curr_vt, gt_flow)
+                if global_step > args.warm_up_flow:
+                    con_loss = batch_mse(curr_z0, post_z0)
+                else:
+                    con_loss = torch.zeros_like(t)
+                loss = con_loss.mean() + flow_loss.mean()
                 if args.use_gan:
                     loss += Gloss
+            # record losses
+            my_vars = locals()
+            for key in register_key:
+                try:
+                    loss_dict[key] = my_vars[key]
+                except KeyError:
+                    loss_dict[key] = torch.zeros_like(t)
+            loss_record.add(t, loss_dict)
+            
             # optimize 
             loss.backward()
             optimizer.step()
             # update ema target
             flow.ema_model.ema_step(args.target_ema_decay, flow.model)
+            
+            
+            if args.progressive_iter:
+                if rank == 0:
+                    if (global_step % args.progressive_iter == 0) and (flow.threshold <= 1.0) and global_step > 0:
+                        flow.threshold += 0.05
+                        logger.info('Increase threshold to  {}'.format(flow.threshold))
+                        
 
             global_step += 1
             if iteration % 100 == 0:
@@ -284,9 +363,9 @@ def train(rank, gpu, args):
                             logger.info('epoch {} iteration{}, Loss: {}, FLoss: {}, CONLoss: {}, Gloss: {}, Dloss {} Train Steps/Sec: {:.2f}'.format(
                                 epoch,
                                 iteration, 
-                                loss.item(), 
-                                reflow_loss.item() if args.model_ckpt else flow_loss.item(), 
-                                con_loss.item(), 
+                                loss.item(),
+                                reflow_loss.mean().item() if args.model_ckpt else flow_loss.mean().item(), 
+                                con_loss.mean().item(), 
                                 Gloss.item(),
                                 Dloss.item(),
                                 steps_per_sec))
@@ -295,17 +374,19 @@ def train(rank, gpu, args):
                             epoch,
                             iteration, 
                             loss.item(), 
-                            reflow_loss.item() if args.model_ckpt else flow_loss.item(), 
-                            con_loss.item(), 
+                            reflow_loss.mean().item() if args.model_ckpt else flow_loss.mean().item(), 
+                            con_loss.mean().item(), 
                             steps_per_sec))
                     start_time = time()
-
-        if not args.no_lr_decay:
+                    
+        
+        if args.lr_decay:
             scheduler.step()
             if args.use_gan:
                 schedulerD.step()
 
         if rank == 0:
+            loss_record.plot(os.path.join(record_path, "Epoch_{}.jpg".format(epoch)))
             if epoch % args.plot_every == 0:
                 with torch.no_grad():
                     rand = torch.randn_like(z0)[:4]
@@ -315,29 +396,28 @@ def train(rank, gpu, args):
                     traj, x0_list = flow.sample_ode_generative(rand, args.num_sample_timesteps)
                     fake_image = traj[-1]
                     fake_image = first_stage_model.decode(fake_image / args.scale_factor).sample
-                traj = torch.cat(traj, dim=0)
-                traj = first_stage_model.decode(traj / args.scale_factor).sample
+                # traj = torch.cat(traj, dim=0)
+                # traj = first_stage_model.decode(traj / args.scale_factor).sample
                 x0_list = torch.cat(x0_list, dim=0)
                 x0_list = first_stage_model.decode(x0_list / args.scale_factor).sample
                 torchvision.utils.save_image(x0_list, os.path.join(exp_path, 'x0_epoch_{}.png'.format(epoch)), normalize=True, nrow=4)
-                torchvision.utils.save_image(traj, os.path.join(exp_path, 'traj_epoch_{}.png'.format(epoch)), normalize=True, nrow=4)
+                # torchvision.utils.save_image(traj, os.path.join(exp_path, 'traj_epoch_{}.png'.format(epoch)), normalize=True, nrow=4)
                 torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}.png'.format(epoch)), normalize=True)
                 logger.info("Finish sampling")
 
-            if args.save_content:
-                if epoch % args.save_content_every == 0:
-                    logger.info('Saving content.')
-                    if args.use_gan:
-                        content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
-                                'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
-                                'scheduler': scheduler.state_dict(),
-                                'modelD_dict': modelD.state_dict(), 'optimizerD': optimizerD.state_dict(),
-                                'schedulerD': schedulerD.state_dict()}
-                    else:
-                        content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
-                                'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
-                                'scheduler': scheduler.state_dict()}
-                    torch.save(content, os.path.join(exp_path, 'content.pth'))
+            if epoch % args.save_content_every == 0:
+                logger.info('Saving content.')
+                if args.use_gan:
+                    content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
+                            'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                            'scheduler': scheduler.state_dict(),
+                            'modelD_dict': modelD.state_dict(), 'optimizerD': optimizerD.state_dict(),
+                            'schedulerD': schedulerD.state_dict()}
+                else:
+                    content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
+                            'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                            'scheduler': scheduler.state_dict()}
+                torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
                 if args.use_ema:
@@ -433,25 +513,30 @@ if __name__ == '__main__':
     parser.add_argument('--use_fp16', action='store_true', default=False)
     parser.add_argument('--use_grad_checkpointing', action='store_true', default=False, help="Enable gradient checkpointing for mem saving")
     parser.add_argument('--batch_size', type=int, default=128, help='input batch size')
-    parser.add_argument('--num_epoch', type=int, default=1200)
+    parser.add_argument('--num_epoch', type=int, default=25)
     parser.add_argument('--lr', type=float, default=2e-5, help='learning rate g')
     parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam')
     parser.add_argument('--beta2', type=float, default=0.9, help='beta2 for adam')
-    parser.add_argument('--no_lr_decay',action='store_true', default=False)
+    parser.add_argument('--lr_decay',action='store_true', default=False)
     parser.add_argument('--use_ema', action='store_true', default=False, help='use EMA or not')
     parser.add_argument('--ema_decay', type=float, default=0.9999, help='decay rate for EMA')
     parser.add_argument('--target_ema_decay', type=float, default=0.95, help='decay rate for target EMA model')
+    parser.add_argument('--progressive_iter', type=int, default=None, help="training progressive")
 
     # consistency + gan
     parser.add_argument('--init_threshold', type=float, default=0.2, help='training threshold')
+    parser.add_argument('--trunc_threshold', type=float, default=0.5, help='training threshold')
     parser.add_argument('--warm_up_con', type=int, default=0, help='warm up consistency loss')
+    parser.add_argument('--warm_up_gan', type=int, default=0, help='warm up consistency loss')
+    parser.add_argument('--warm_up_inverse', type=int, default=0, help='warm up consistency loss')
+    parser.add_argument('--warm_up_flow', type=int, default=0, help='warm up flow matching loss')
     parser.add_argument('--use_gan', action='store_true', default=False)
     parser.add_argument('--inner_skip', type=int, default=1)
 
     # saving
     parser.add_argument('--save_content', action='store_true', default=False)
-    parser.add_argument('--save_content_every', type=int, default=10, help='save content for resuming every x epochs')
-    parser.add_argument('--save_ckpt_every', type=int, default=25, help='save ckpt every x epochs')
+    parser.add_argument('--save_content_every', type=int, default=5, help='save content for resuming every x epochs')
+    parser.add_argument('--save_ckpt_every', type=int, default=5, help='save ckpt every x epochs')
     parser.add_argument('--plot_every', type=int, default=1, help='plot every x epochs')
 
     ###ddp

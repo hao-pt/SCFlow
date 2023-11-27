@@ -129,12 +129,13 @@ class RectifiedFlow(BaseFlow):
 
 
 class ConsistencyFlow(RectifiedFlow):
-    def __init__(self, device, model, ema_model, threshold, pretrained_model=None):
+    def __init__(self, device, model, ema_model, threshold, trunc_threshold, pretrained_model=None):
         self.ema_model = ema_model
         self.pretrained_model = pretrained_model # copy.deepcopy(model.module)
         self.model = model
         self.device = device
         self.threshold = threshold
+        self.trunc_threshold = trunc_threshold
 
     def get_train_tuple(self, z0=None, z1=None, t=None, eps=1e-5, model_kwargs={}):                     
         t = t.view(-1, 1, 1, 1)
@@ -143,29 +144,38 @@ class ConsistencyFlow(RectifiedFlow):
         gt_flow = z1 - z0
         # local consistency
         t_down = copy.deepcopy(t)
+        t_up = 1 - copy.deepcopy(t)
+        t_up[t_up >= self.threshold] = self.threshold
         t_down[t_down >= self.threshold] = self.threshold
         delta_t_down = (torch.rand_like(t)*t_down).to(t.device)
+        delta_t_up = (torch.rand_like(t)*t_up).to(t.device)
         post_t = t - delta_t_down
+        prev_t = t + delta_t_up
         if self.pretrained_model is not None:
             with torch.no_grad():
                 teacher_vt = self.pretrained_model(t, zt, y=model_kwargs.get("y", None))
                 post_zt = zt - delta_t_down.view(-1, 1, 1, 1) * teacher_vt
+                prev_zt = zt + delta_t_up.view(-1, 1, 1, 1) * teacher_vt
         else:
-            post_zt = zt - delta_t_down.view(-1, 1, 1, 1) * (z1 - z0)        
+            post_zt = zt - delta_t_down.view(-1, 1, 1, 1) * (z1 - z0)
+            prev_zt = zt + delta_t_up.view(-1, 1, 1, 1) * (z1 - z0)     
         
         curr_vt = self.model(t, zt, **model_kwargs)
         curr_z0 = zt - t.view(-1, 1, 1, 1) * curr_vt
         with torch.no_grad():
             # consistency post_t            
             post_vt = self.ema_model(post_t, post_zt, **model_kwargs).detach()
+            prev_vt = self.ema_model(prev_t, prev_zt, **model_kwargs).detach()
             post_z0 = post_zt - post_t.view(-1, 1, 1, 1) * post_vt
+            prev_z0 = prev_zt - prev_t.view(-1, 1, 1, 1) * prev_vt
             # reflow: predict z0 directly from z1
-            reflow_v1 = self.model(torch.ones_like(t), z1)
-            reflow_z0 = z1 - reflow_v1
-        # compute reflow intermidiate state
+        reflow_v1 = self.model(torch.ones_like(t), z1)
+        reflow_z0 = z1 - reflow_v1
+        # compute reflow intermidiate state, should we replace with ema
+        # here there are few ideas, ema for reflow_v1/vt (ema for no grad, call ema version) and optimize one of them (call swap version) -- not work)
         reflow_zt =  t.view(-1, 1, 1, 1) * reflow_z0.detach() + (1 - t).view(-1, 1, 1, 1) * z1
         reflow_vt = self.model(t, reflow_zt, **model_kwargs)
         reflow_z0_rescon = reflow_zt - t.view(-1, 1, 1, 1)*reflow_vt
         # song technique to truncate
-        post_z0[post_t<0.2] = z0[post_t<0.2]
-        return curr_vt, post_vt, gt_flow, curr_z0, post_z0, reflow_z0_rescon, reflow_z0
+        post_z0[post_t<self.trunc_threshold] = z0[post_t<self.trunc_threshold]
+        return curr_vt, post_vt, prev_vt, gt_flow, curr_z0, post_z0, prev_z0, reflow_z0_rescon, reflow_z0

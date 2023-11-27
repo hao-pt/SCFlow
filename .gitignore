@@ -17,3 +17,4 @@ stabilityai/
 data/
 slurm_scripts/
 consistent_generated_samples/
+reflow_consistent_generated_samples/

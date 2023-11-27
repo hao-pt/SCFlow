@@ -112,9 +112,8 @@ def sample_and_test(rank, gpu, args):
     model = create_network(args).to(device)
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device)
 
-    # ckpt = torch.load('./saved_info/cd_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
-    ckpt = torch.load('./saved_info/cd_flow/{}/{}/content.pth'.format(args.dataset, args.exp), map_location=device)["model_dict"]
-    # ckpt = torch.load('./saved_info/cd_flow/{}/content.pth'.format(args.dataset))["model_dict"]
+    ckpt = torch.load('./saved_info/reflow_consistency/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    # ckpt = torch.load('./saved_info/cd_flow/{}/model_{}.pth'.format(args.dataset, args.epoch_id), map_location=device)
     print("Finish loading model")
     # loading weights from ddp in single gpu
     for key in list(ckpt.keys()):
@@ -124,7 +123,7 @@ def sample_and_test(rank, gpu, args):
     del ckpt
 
     iters_needed = args.n_sample // args.batch_size
-    save_dir = "./consistent_generated_samples/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
+    save_dir = "./reflow_consistent_generated_samples/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
     if args.method in FIXER_SOLVER:
         save_dir += "_s{}".format(args.num_steps)
 
@@ -159,12 +158,11 @@ def sample_and_test(rank, gpu, args):
         if not args.use_karras_samplers:
             x0hat_list, traj = sample_from_model(model, x, model_kwargs, args)
             fake_sample = traj[-1] 
-            # print(torch.max(fake_sample), torch.min(fake_sample))
         else:
             fake_sample = sample_from_model2(model, x, model_kwargs, generator, args)
 
         if args.cfg_scale > 1.:
-            fake_sample, _ = fake_sample.chunk(2, dim=0)  # Remove null class samples
+            fake_sample, _ = fake_sample.chunk(2, dim=0)
 
         fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
         return fake_image
@@ -241,10 +239,12 @@ def sample_and_test(rank, gpu, args):
                 for j, x in enumerate(fake_image):
                     index = j * args.world_size + rank + total
                     torchvision.utils.save_image(x, '{}/{}.jpg'.format(save_dir, index))
+                    # torchvision.utils.save_image(x, '{}/{}.jpg'.format(save_dir, index), normalize=True)
                 if rank == 0:
                     print('generating batch ', i)
                 total += global_batch_size
-
+                
+       
         # make sure all processes have finished
         dist.barrier()
         if rank == 0:
@@ -252,8 +252,8 @@ def sample_and_test(rank, gpu, args):
             kwargs = {'batch_size': 200, 'device': device, 'dims': 2048}
             fid = calculate_fid_given_paths(paths=paths, **kwargs)
             print('FID = {}'.format(fid))
-            with open(args.output_log, "a") as f:
-                f.write('Epoch = {}, FID = {}\n'.format(args.epoch_id, fid))
+            # with open(args.output_log, "a") as f:
+            #     f.write('Epoch = {}, FID = {}\n'.format(args.epoch_id, fid))
         dist.barrier()
         dist.destroy_process_group()
     else:
@@ -294,7 +294,7 @@ if __name__ == '__main__':
     parser.add_argument('--measure_time', action='store_true', default=False,
                             help='wheter or not measure time')
     parser.add_argument('--epoch_id', type=int,default=1000)
-    parser.add_argument('--n_sample', type=int, default=50000,
+    parser.add_argument('--n_sample', type=int, default=10000,
                             help='number of sampled images')
 
     parser.add_argument('--model_type', type=str, default="adm",
