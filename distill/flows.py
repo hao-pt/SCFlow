@@ -173,7 +173,7 @@ class ConsistencyFlow(RectifiedFlow):
         reflow_z0 = z1 - reflow_v1
         # compute reflow intermidiate state, should we replace with ema
         # here there are few ideas, ema for reflow_v1/vt (ema for no grad, call ema version) and optimize one of them (call swap version) -- not work)
-        reflow_zt =  t.view(-1, 1, 1, 1) * reflow_z0.detach() + (1 - t).view(-1, 1, 1, 1) * z1
+        reflow_zt =  (1 - t).view(-1, 1, 1, 1) * reflow_z0.detach() + t.view(-1, 1, 1, 1) * z1
         reflow_vt = self.model(t, reflow_zt, **model_kwargs)
         reflow_z0_rescon = reflow_zt - t.view(-1, 1, 1, 1)*reflow_vt
         # song technique to truncate

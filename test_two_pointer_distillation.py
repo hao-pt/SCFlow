@@ -1,9 +1,3 @@
-# ---------------------------------------------------------------
-# Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-#
-# This work is licensed under the NVIDIA Source Code License
-# for Denoising Diffusion GAN. To view a copy of this license, see the LICENSE file.
-# ---------------------------------------------------------------
 import os
 import argparse
 import numpy as np
@@ -112,8 +106,6 @@ def sample_and_test(rank, gpu, args):
     model = create_network(args).to(device)
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device)
     ckpt = torch.load('./saved_info/2_pointers_consistency/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
-    # ckpt = torch.load('./saved_info/reflow_consistency/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
-    # ckpt = torch.load('./saved_info/cd_flow/{}/model_{}.pth'.format(args.dataset, args.epoch_id), map_location=device)
     print("Finish loading model")
     # loading weights from ddp in single gpu
     for key in list(ckpt.keys()):
@@ -121,10 +113,19 @@ def sample_and_test(rank, gpu, args):
     model.load_state_dict(ckpt, strict=True)
     model.eval()
     del ckpt
+    
+    teacher = create_network(args).to(device)
+    ckpt_teacher = torch.load('./saved_info/latent_flow/celeba_256/latent_fair/model_450.pth', map_location=device)
+    print("Finish loading teacher model")
+    # loading weights from ddp in single gpu
+    for key in list(ckpt_teacher.keys()):
+        ckpt_teacher[key[7:]] = ckpt_teacher.pop(key)
+    teacher.load_state_dict(ckpt_teacher, strict=True)
+    teacher.eval()
+    del ckpt_teacher
 
     iters_needed = args.n_sample // args.batch_size
-    # save_dir = "./reflow_consistent_generated_samples/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
-    # save_dir = "./2_pointer_generated_samples/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
+    save_dir = "./2_pointer_generated_samples/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
     
     if args.method in FIXER_SOLVER:
         save_dir += "_s{}".format(args.num_steps)
@@ -261,7 +262,22 @@ def sample_and_test(rank, gpu, args):
     else:
         print("Inference")
         with torch.no_grad():
-            fake_image = run_sampling(args.batch_size, generator)
+            # fake_image = run_sampling(args.batch_size, generator)
+            z = generator.randn(args.batch_size, 4, args.image_size//8, args.image_size//8).to(device)
+            t = torch.ones((z.size(0), 1), device=z.device) * 0.85
+            vt = teacher(t.squeeze(), z)
+            zt = z - vt 
+            
+            # t = torch.ones((z.size(0), 1), device=z.device) * 0.7
+            # vt = teacher(t.squeeze(), zt)
+            # zt = zt - vt * 0.3
+            # t = torch.ones((z.size(0), 1), device=z.device)*0.7
+            # vt_teacher = model(t.squeeze(), zt)
+            # zt = zt - vt_teacher * 0.1
+            # vt_teacher = model(t.squeeze(), zt)
+            # zt = zt - vt_teacher * 0.2
+            fake_image = first_stage_model.decode(zt / args.scale_factor).sample
+            
         fake_image = torch.clamp(to_range_0_1(fake_image), 0, 1)
         if not args.use_karras_samplers:
             if args.trunc is not None:
