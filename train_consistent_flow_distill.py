@@ -67,6 +67,8 @@ class LossRecord:
         
 def batch_mse(input, target):
     return torch.mean((input - target)**2, dim=(1,2,3))
+
+
         
 
 def huber_loss(x, y, c = 0.01):
@@ -302,34 +304,41 @@ def train(rank, gpu, args):
             
             # consistenncy + reflow
             if args.model_ckpt:
-                if global_step < args.warm_up_con:
-                    con_loss = huber_loss(curr_z0, post_z0)
-                    loss = con_loss.mean()
-                    reflow_loss = torch.zeros_like(t)
-                else:
-                    reflow_loss = batch_mse(reflow_z0_rescon, reflow_z0.detach()) #+ F.mse_loss(pred_z0, z_0) + F.mse_loss(pred_z0_, z_0)
-                    # update inner loop
-                    if global_step % args.inner_skip == 0:
-                        con_loss = huber_loss(curr_z0, post_z0)
-                        loss = 0.1*reflow_loss.mean() + con_loss.mean()
-                    else:
-                        loss = reflow_loss.mean()
-                    # gan loss
+                con_loss = huber_loss(curr_z0, post_z0)
+                loss = con_loss.mean()
+                # reflow loss
+                if global_step > args.warm_up_con:
+                    reflow_loss = batch_mse(reflow_z0_rescon, reflow_z0.detach())
+                    loss += args.scale_reflow*reflow_loss.mean()
+                # gan loss
                 if global_step > args.warm_up_gan and args.use_gan:
-                    loss += 0.1*Gloss
+                    loss += args.scale_gan*Gloss
+                # bidirectional flow consistency
                 if global_step > args.warm_up_inverse:
                     prev_con = huber_loss(curr_z0, prev_z0)
-                    loss += 0.1*prev_con.mean()
+                    loss += args.scale_inverse*prev_con.mean()
             else:
                 # consider using reflow loss to ensure consistency ?????
-                flow_loss = batch_mse(curr_vt, gt_flow)
-                if global_step > args.warm_up_flow:
-                    con_loss = batch_mse(curr_z0, post_z0)
-                else:
-                    con_loss = torch.zeros_like(t)
-                loss = con_loss.mean() + flow_loss.mean()
-                if args.use_gan:
-                    loss += Gloss
+                # flow_loss = batch_mse(curr_vt, gt_flow)
+                # if global_step > args.warm_up_flow:
+                #     con_loss = batch_mse(curr_z0, post_z0)
+                # else:
+                #     con_loss = torch.zeros_like(t)
+                # loss = con_loss.mean() + flow_loss.mean()
+                # if args.use_gan:
+                #     loss += Gloss
+                con_loss = batch_mse(curr_z0, post_z0)
+                loss = con_loss.mean()
+                if global_step >= args.warm_up_con:
+                    # reflow
+                    # _loss = batch_mse(reflow_z0_rescon, reflow_z0.detach())
+                    reflow_loss = batch_mse(curr_z0, z0)
+                    loss += args.scale_reflow*reflow_loss.mean()
+                if global_step >= args.warm_up_gan and args.use_gan:
+                    loss += args.scale_gan*Gloss
+                if global_step >= args.warm_up_inverse:
+                    prev_con = huber_loss(curr_z0, prev_z0)
+                    loss += args.scale_inverse*prev_con.mean()
             # record losses
             my_vars = locals()
             for key in register_key:
@@ -364,7 +373,7 @@ def train(rank, gpu, args):
                                 epoch,
                                 iteration, 
                                 loss.item(),
-                                reflow_loss.mean().item() if args.model_ckpt else flow_loss.mean().item(), 
+                                reflow_loss.mean().item() if global_step > args.warm_up_con else 0, 
                                 con_loss.mean().item(), 
                                 Gloss.item(),
                                 Dloss.item(),
@@ -374,7 +383,7 @@ def train(rank, gpu, args):
                             epoch,
                             iteration, 
                             loss.item(), 
-                            reflow_loss.mean().item() if args.model_ckpt else flow_loss.mean().item(), 
+                            reflow_loss.mean().item() if global_step > args.warm_up_con else 0, 
                             con_loss.mean().item(), 
                             steps_per_sec))
                     start_time = time()
@@ -532,6 +541,9 @@ if __name__ == '__main__':
     parser.add_argument('--warm_up_flow', type=int, default=0, help='warm up flow matching loss')
     parser.add_argument('--use_gan', action='store_true', default=False)
     parser.add_argument('--inner_skip', type=int, default=1)
+    parser.add_argument('--scale_inverse', type=float, default=0.1)
+    parser.add_argument('--scale_gan', type=float, default=0.1)
+    parser.add_argument('--scale_reflow', type=float, default=0.1)
 
     # saving
     parser.add_argument('--save_content', action='store_true', default=False)

@@ -18,3 +18,4 @@ data/
 slurm_scripts/
 consistent_generated_samples/
 reflow_consistent_generated_samples/
+2_pointer_generated_samples/
