@@ -17,10 +17,10 @@ slurm_template = """#!/bin/bash -e
 #SBATCH --mail-user=v.haopt12@vinai.io
 #SBATCH --ntasks=1
 
-module purge
-module load python/miniconda3/miniconda3
-eval "$(conda shell.bash hook)"
-conda activate ../envs/flow_pytorch2/
+# module purge
+# module load python/miniconda3/miniconda3
+# eval "$(conda shell.bash hook)"
+# conda activate ../envs/flow_pytorch2/
 
 export MASTER_PORT={master_port}
 export WORLD_SIZE=1
@@ -41,17 +41,18 @@ echo $MODEL_TYPE $EPOCH_ID $DATASET $EXP {method} {num_steps}
 echo "----------------------------"
 
 CUDA_VISIBLE_DEVICES={device} python test_flow_latent.py --exp $EXP \
-    --dataset $DATASET --batch_size 50 --epoch_id $EPOCH_ID \
+    --dataset $DATASET --batch_size 1 --epoch_id $EPOCH_ID \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
     --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
     --model_type $MODEL_TYPE \
     --method {method} --num_steps {num_steps} \
-    --compute_fid --output_log $OUTPUT_LOG \
     --master_port $MASTER_PORT  --num_process_per_node {num_gpus} \
     --n_sample 50_000 \
     --num_classes 1000 --label_dim 1000 --label_dropout 0.15 \
-    --cfg_scale {cfg_scale}
-    # --faster_test \
+    --cfg_scale {cfg_scale} \
+    --measure_time \
+    --faster_test \
+    # --compute_fid --output_log $OUTPUT_LOG \
     # --use_origin_adm \
     # --load_ema \
     # --num_head_channels 64 \
@@ -72,7 +73,7 @@ config = pd.DataFrame({
     "epochs": [1125]*2,
     "num_steps": [0]*2,
     "methods": ['dopri5']*2,
-    "cfg_scale": [1.25, 1.],
+    "cfg_scale": [1.25, 1.5],
 })
 print(config)
 

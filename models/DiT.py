@@ -274,7 +274,7 @@ class DiT(nn.Module):
         Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
-        half = x[: len(x) // 2]
+        half = x[: max(len(x) // 2, 1)]
         combined = torch.cat([half, half], dim=0)
         model_out = self.forward(t, combined, y)
         # For exact reproducibility reasons, we apply classifier-free guidance on only

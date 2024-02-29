@@ -25,9 +25,10 @@ from torch.multiprocessing import Process
 
 from datasets_prep import get_dataset
 from models import create_network
-from EMA import EMA
+from EMA import EMA, EMAMODEL
 
 from models.augment import AugmentPipe
+from stochastic_flow import stochastic_forward
 
 
 def copy_source(file, output_dir):
@@ -106,6 +107,7 @@ def train(rank, gpu, args):
     model = create_network(args).to(device, dtype=dtype)
     if args.use_grad_checkpointing and "DiT" in args.model_type:
         model.set_gradient_checkpointing()
+    ema = EMAMODEL(model)
 
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device, dtype=dtype)
     first_stage_model = first_stage_model.eval()
@@ -118,15 +120,20 @@ def train(rank, gpu, args):
 
     broadcast_params(model.parameters())
 
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.0)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    if args.use_ema:
-        optimizer = EMA(optimizer, ema_decay=args.ema_decay)
+    # if args.use_ema:
+    #     optimizer = EMA(optimizer, ema_decay=args.ema_decay)
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epoch, eta_min=1e-5)
+    # Ensure EMA is initialized with synced weights
+    ema.ema_step(decay_rate=0, model=model)  
 
     #ddp
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu], find_unused_parameters=False)
+
+    if args.compile:
+        model = torch.compile(model)
 
     if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
@@ -134,6 +141,8 @@ def train(rank, gpu, args):
         init_epoch = checkpoint['epoch']
         epoch = init_epoch
         model.load_state_dict(checkpoint['model_dict'])
+        ema.ema_model.load_state_dict(checkpoint['ema_model_dict'])
+
         # load G
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
@@ -148,7 +157,8 @@ def train(rank, gpu, args):
         checkpoint = torch.load(checkpoint_file, map_location=device)
         epoch = int(args.model_ckpt.split("_")[-1][:-4])
         init_epoch = 0
-        model.load_state_dict(checkpoint)
+        model.load_state_dict(checkpoint['model'])
+        ema.ema_model.load_state_dict(checkpoint['ema_model_dict'])
         global_step = 0
 
         logger.info("=> loaded checkpoint (epoch {})"
@@ -157,8 +167,7 @@ def train(rank, gpu, args):
     else:
         global_step, epoch, init_epoch = 0, 0, 0
 
-    if args.compile:
-        model = torch.compile(model)
+    ema.ema_step(decay_rate=0, model=model.module) # remember to remove
 
     use_label = True if "imagenet" in args.dataset else False
     is_latent_data = True if "latent" in args.dataset else False
@@ -189,6 +198,8 @@ def train(rank, gpu, args):
             # u = (1 - 1e-5) * z_1 - z_0
             z_t = (1 - t) * z_0 + t * z_1
             u = z_1 - z_0
+            z_t, u, t = stochastic_forward(z_t, u, t, form=args.gamma_form)
+
             v = model(t.squeeze(), z_t, y) # augment_labels)
             loss = F.mse_loss(v, u)
             loss.backward()
@@ -201,6 +212,9 @@ def train(rank, gpu, args):
                     logger.info('epoch {} iteration{}, Loss: {}, Train Steps/Sec: {:.2f}'.format(epoch, iteration, loss.item(), steps_per_sec))
                     start_time = time()
 
+            # update ema 
+            ema.ema_step(args.ema_decay, model.module)
+
         if not args.no_lr_decay:
             scheduler.step()
 
@@ -211,7 +225,7 @@ def train(rank, gpu, args):
                     rand = torch.randn_like(z_0)[:4]
                     if y is not None:
                         y = y[:4]
-                    sample_model = partial(model, y=y)
+                    sample_model = partial(ema.ema_model, y=y)
                     # sample_func = lambda t, x: model(t, x, y=y)
                     fake_sample = sample_from_model(sample_model, rand)[-1]
                     fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
@@ -223,17 +237,24 @@ def train(rank, gpu, args):
                 if epoch % args.save_content_every == 0:
                     logger.info('Saving content.')
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
-                               'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
-                               'scheduler': scheduler.state_dict()}
+                               'model_dict': model.state_dict() if not args.compile else model._orig_mod.state_dict(), 
+                               'optimizer': optimizer.state_dict(),
+                               'scheduler': scheduler.state_dict(),
+                               'ema_model_dict': ema.ema_model.state_dict(),
+                               }
 
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
-                torch.save(model.state_dict(), os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
-                if args.use_ema:
-                    optimizer.swap_parameters_with_ema(store_params_in_ema=True)
-                    torch.save(model.state_dict(), os.path.join(exp_path, 'model_ema{}.pth'.format(epoch)))
-                    optimizer.swap_parameters_with_ema(store_params_in_ema=True)
+                # torch.save(model.state_dict(), os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
+                torch.save({
+                    "model": model.state_dict() if not args.compile else model._orig_mod.state_dict(), 
+                    "ema_model": ema.ema_model.state_dict(),
+                }, os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
+                # if args.use_ema:
+                #     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
+                #     torch.save(model.state_dict(), os.path.join(exp_path, 'model_ema{}.pth'.format(epoch)))
+                #     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
 
 
 def init_processes(rank, size, fn, args):
@@ -293,6 +314,10 @@ if __name__ == '__main__':
                             help='num classes')
     parser.add_argument('--label_dropout', type=float, default=0.,
                             help='Dropout probability of class labels for classifier-free guidance')
+    parser.add_argument('--weight_decay', type=float, default=0.,
+                            help='weight decay')
+    parser.add_argument('--gamma_form', type=str, default="none",
+                            help='gamma form in stochastic forward', choices=['none', 'log', 'sin'])
 
     # Original ADM
     parser.add_argument('--layout', action='store_true')
@@ -310,7 +335,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_head_channels', type=int, default=-1,
                             help='number of head channels')
 
-    parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="stabilityai/sd-vae-ft-mse")
+    parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="../stabilityai/sd-vae-ft-ema")
 
     # training
     parser.add_argument('--exp', default='experiment_cifar_default', help='name of experiment')

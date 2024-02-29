@@ -11,7 +11,7 @@ slurm_template = """#!/bin/bash -e
 #SBATCH --gpus={num_gpus}
 #SBATCH --nodes=1
 #SBATCH --mem-per-gpu=36G
-#SBATCH --cpus-per-gpu=32
+#SBATCH --cpus-per-gpu=8
 #SBATCH --partition=research
 #SBATCH --mail-type=all
 #SBATCH --mail-user=v.haopt12@vinai.io
@@ -64,7 +64,7 @@ CUDA_VISIBLE_DEVICES={device} python test_consistent_flow.py --exp $EXP \
 ###### ARGS
 model_type = ["DiT-L/2", "adm"][1]
 dataset = ["celeba_256", "ffhq_256"][0]
-exp = "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1" # "celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_notrunct_huber0.01" # ["celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_notrunct_huber0.01", "celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan_notrunct", "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct", "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher"][-1]
+exp = "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_orihuber0.01"# "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1" # "celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_notrunct_huber0.01" # ["celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_notrunct_huber0.01", "celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan_notrunct", "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct", "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher"][-1]
 # "con_fm" #  "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip1_gan" # ""celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan" # "celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_songbound0.2_warmup15k" # "# "celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher"  "celeba_f8_adm_lr2e-5_100steps_ema0.9_fmloss_skip30_gan_skipteacher"
 exp_root_dir = ["ct_flow", "cd_flow"][1]
 BASE_PORT = 8026
@@ -73,7 +73,7 @@ device = "0" #,2,3,4,5,6,7"
 
 config = pd.DataFrame({
     "epochs": [200]*6,
-    "num_steps": [1,2,4,8,16,24],
+    "num_steps": [1, 2, 4, 8, 12, 16],
     "methods": ['euler']*6,
     "cfg_scale": [1]*6,
     "beta": [0.]*6

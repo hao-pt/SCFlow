@@ -8,3 +8,6 @@ timm
 blobfile
 pot
 pandas
+einops
+opencv-python
+scikit-image

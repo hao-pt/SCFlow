@@ -46,7 +46,7 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 
 ############################################### ADM ~ CelebA 256 ###############################################
 # --multi_gpu 
-CUDA_VISIBLE_DEVICES=0 python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1 \
+CUDA_VISIBLE_DEVICES=0 python train_consistent_flow_distill.py --exp celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_orihuber0.01 \
     --dataset celeba_256 --datadir data/celeba/celeba-lmdb \
     --batch_size 64 --num_epoch 200 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
@@ -65,7 +65,7 @@ CUDA_VISIBLE_DEVICES=0 python train_consistent_flow_distill.py --exp celeba_f8_a
     --lrD 1e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
     --num_sample_timesteps 2 \
     --no_lr_decay \
-    --huber_loss --c 0.1 \
+    --huber_loss --c 0.01 \
     # --disable_gan \
     # --resume 
     # --gan_warmup_iters 15_000 \
