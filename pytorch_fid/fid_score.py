@@ -88,6 +88,7 @@ parser.add_argument('--dims', type=int, default=2048,
                     choices=list(InceptionV3.BLOCK_INDEX_BY_DIM),
                     help=('Dimensionality of Inception features to use. '
                           'By default, uses pool3 features'))
+parser.add_argument('--run_dir', type=str, default="./pytorch_fid/")
 parser.add_argument('path', type=str, nargs=2,
                     help=('Paths to the generated images or '
                           'to .npz statistic files'))
@@ -306,6 +307,8 @@ def main():
                                           device,
                                           args.dims)
     print('FID: ', fid_value)
+    with open(f"{args.run_dir}/fid.txt", "at") as f:
+        f.write(f'FID: {fid_value:.2f}')
 
 
 if __name__ == '__main__':

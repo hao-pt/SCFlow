@@ -10,20 +10,26 @@ import numpy as np
 from tqdm import tqdm
 import math
 from functools import partial
+
 import torch
 from torch import nn
 import torchvision
 from torchdiffeq import odeint_adjoint as odeint
+
 import torch.distributed as dist
 from torch.multiprocessing import Process
+
 from models import create_network
+
 from pytorch_fid.fid_score import calculate_fid_given_paths
 from ddp_utils import init_processes
 from sampler.karras_sample import karras_sample
 from sampler.random_util import get_generator
 
+from distill.flows import BaseFlow
+
 ADAPTIVE_SOLVER = ["dopri5", "dopri8", "adaptive_heun", "bosh3"]
-FIXER_SOLVER = ["euler", "rk4", "midpoint", "stochastic"]
+FIXER_SOLVER = ["euler", "rk4", "midpoint", "stochastic", "heun"]
 
 
 class NFECount(nn.Module):
@@ -37,26 +43,43 @@ class NFECount(nn.Module):
         return self.model(t, x, *args, **kwargs)
 
 
-def sample_from_model(model, z, model_kwargs, args):
-    N = args.num_steps
-    dt = 1./args.num_steps
-    x0hat_list = []
-    traj = []
-    for i in range(N, 0, -1):
-        t = torch.ones((z.size(0), 1), device=z.device)*i/N
-        t_next = torch.ones((z.size(0),1), device=z.device) * (i-1) / N
-        vt = model(t.squeeze(), z)
-        # print(max(vt), min(vt), torch.mean(vt))
-        if args.trunc is not None:
-            vt = torch.clamp(vt, min=-args.trunc, max=args.trunc)
-        x0hat = z - vt * t.view(-1,1,1,1)
-        x0hat_list.append(x0hat)
-        if args.stochastic:
-            z = x0hat.detach().clone() * (1. - t_next.view(-1,1,1,1)) + t_next.view(-1,1,1,1) * torch.randn_like(z)
+def sample_from_model(model, x_0, model_kwargs, args):
+    if args.method in ADAPTIVE_SOLVER:
+        options = {
+            "dtype": torch.float64,
+        }
+    else:
+        options = {
+            "step_size": args.step_size,
+            "perturb": args.perturb
+        }
+    if args.compute_nfe:
+        # model.count_nfe = True
+        model = NFECount(model).to(x_0.device) # count wrapper
+
+    t = torch.tensor([1., 0.], device="cuda")
+
+    def denoiser(t, x_0):
+        if args.cfg_scale > 1.:
+            return model.forward_with_cfg(t, x_0, **model_kwargs)
         else:
-            z = z.detach().clone() - vt * dt
-        traj.append(z.detach().clone())
-    return x0hat_list, traj
+            return model(t, x_0, **model_kwargs)
+
+    fake_image = odeint(denoiser,
+                        x_0,
+                        t,
+                        method=args.method,
+                        atol = args.atol,
+                        rtol = args.rtol,
+                        adjoint_method=args.method,
+                        adjoint_atol= args.atol,
+                        adjoint_rtol= args.rtol,
+                        options=options,
+                        adjoint_params=model.parameters(),
+                        )
+    if args.compute_nfe:
+        return fake_image, model.nfe
+    return fake_image
 
 
 def sample_from_model2(model, x, model_kwargs, generator, args):
@@ -82,6 +105,8 @@ def sample_from_model2(model, x, model_kwargs, generator, args):
 
 def sample_and_test(rank, gpu, args):
     from diffusers.models import AutoencoderKL
+    if args.faster_test:
+        torch.backends.cuda.matmul.allow_tf32 = True
     torch.set_grad_enabled(False)
 
     seed = args.seed + rank
@@ -111,23 +136,28 @@ def sample_and_test(rank, gpu, args):
 
     model = create_network(args).to(device)
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device)
-    ckpt = torch.load('./saved_info/2_pointers_consistency/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
-    # ckpt = torch.load('./saved_info/reflow_consistency/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
-    # ckpt = torch.load('./saved_info/cd_flow/{}/model_{}.pth'.format(args.dataset, args.epoch_id), map_location=device)
+    # ckpt = torch.load('./saved_info/consistent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)["ema_model"]
+    ckpt = torch.load('./saved_info/{}/{}/{}/model_{}.pth'.format(args.exp_root_dir, args.dataset, args.exp, args.epoch_id), map_location=device)# ["ema_model"]
+    ckpt = ckpt.get("ema_model", ckpt)
+    # ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_ema_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
     print("Finish loading model")
     # loading weights from ddp in single gpu
-    for key in list(ckpt.keys()):
-        ckpt[key[7:]] = ckpt.pop(key)
+    if "module" in list(ckpt.keys())[0]:
+        for key in list(ckpt.keys()):
+            ckpt[key[7:]] = ckpt.pop(key)
     model.load_state_dict(ckpt, strict=True)
     model.eval()
+
     del ckpt
 
     iters_needed = args.n_sample // args.batch_size
-    # save_dir = "./reflow_consistent_generated_samples/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
-    # save_dir = "./2_pointer_generated_samples/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
-    
+    save_dir = "./consistent_generated_samples/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
+    # save_dir = "./generated_samples/{}".format(args.dataset)
     if args.method in FIXER_SOLVER:
         save_dir += "_s{}".format(args.num_steps)
+    if args.stochastic:
+        save_dir += "_stochastic{}".format(args.beta)
+        # save_dir += "_stochasticv2"
 
     if rank == 0 and not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -137,7 +167,9 @@ def sample_and_test(rank, gpu, args):
     #### as the same seed can cause identical generation on other gpus
     generator = get_generator(args.generator, args.n_sample, seed)
 
-    def run_sampling(num_samples, generator, cls_index=None):
+    flow = BaseFlow(device, model=model, num_steps=args.num_steps)
+
+    def run_sampling(num_samples, generator, cls_index=None, return_traj=False):
         x = generator.randn(num_samples, 4, args.image_size//8, args.image_size//8).to(device)
         if args.num_classes in [None, 1]:
             model_kwargs = {}
@@ -157,16 +189,28 @@ def sample_and_test(rank, gpu, args):
             else:
                 model_kwargs = dict(y=y)
 
-        if not args.use_karras_samplers:
-            x0hat_list, traj = sample_from_model(model, x, model_kwargs, args)
-            fake_sample = traj[-1] 
+        # if not args.use_karras_samplers:
+        #     fake_sample = sample_from_model(model, x, model_kwargs, args)[-1]
+        # else:
+        #     fake_sample = sample_from_model2(model, x, model_kwargs, generator, args)
+        if args.stochastic:
+            traj, x0_list = flow.sample_ode_generative_stochastic(x, model_kwargs=model_kwargs, beta=args.beta, solver=args.method)
+            # traj, x0_list = flow.sample_ode_generative_gamma(x, model_kwargs=model_kwargs, beta=args.beta)
         else:
-            fake_sample = sample_from_model2(model, x, model_kwargs, generator, args)
+            traj, x0_list = flow.sample_ode_generative(x, model_kwargs=model_kwargs, solver=args.method)
+            # traj, x0_list = flow.sample_ode_generative_range(x, T=torch.cumsum(torch.tensor([0.1/10]*10 + [0.8/30]*30 + [0.1/10]*10, device=device), dim=0), model_kwargs=model_kwargs)
+        fake_sample = traj[-1]
 
         if args.cfg_scale > 1.:
-            fake_sample, _ = fake_sample.chunk(2, dim=0)
-
+            fake_sample, _ = fake_sample.chunk(2, dim=0)  # Remove null class samples
         fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
+
+        if return_traj:
+            traj = [first_stage_model.decode(x / args.scale_factor).sample for x in traj]
+            traj = torch.cat(traj, dim=0)
+            x0_list = [first_stage_model.decode(x / args.scale_factor).sample for x in x0_list]
+            x0_list = torch.cat(x0_list, dim=0)
+            return fake_image, traj, x0_list
         return fake_image
 
     if args.compute_nfe:
@@ -208,6 +252,28 @@ def sample_and_test(rank, gpu, args):
         with torch.no_grad():
             for rep in tqdm(range(repetitions)):
                 starter.record()
+                # x = generator.randn(1, 4, args.image_size//8, args.image_size//8).to(device)
+                # if args.num_classes in [None, 1]:
+                #     model_kwargs = {}
+                # else:
+                #     y = generator.randint(0, args.num_classes, (1,), device=device)
+                #     # Setup classifier-free guidance:
+                #     if args.cfg_scale > 1.:
+                #         x = torch.cat([x, x], 0)
+                #         y_null = torch.tensor([args.num_classes] * 1, device=device) if "DiT" in args.model_type else torch.zeros_like(y)
+                #         y = torch.cat([y, y_null], 0)
+                #         model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
+                #     else:
+                #         model_kwargs = dict(y=y)
+                #
+                # if not args.use_karras_samplers:
+                #     fake_sample = sample_from_model(model, x, model_kwargs, args)[-1]
+                # else:
+                #     fake_sample = sample_from_model2(model, x, model_kwargs, generator, args)
+
+                # if args.cfg_scale > 1.:
+                #     fake_sample, _ = fake_sample.chunk(2, dim=0)  # Remove null class samples
+                # fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
                 _ = run_sampling(1, generator)
                 ender.record()
                 # WAIT FOR GPU SYNC
@@ -241,46 +307,43 @@ def sample_and_test(rank, gpu, args):
                 for j, x in enumerate(fake_image):
                     index = j * args.world_size + rank + total
                     torchvision.utils.save_image(x, '{}/{}.jpg'.format(save_dir, index))
-                    # torchvision.utils.save_image(x, '{}/{}.jpg'.format(save_dir, index), normalize=True)
                 if rank == 0:
                     print('generating batch ', i)
                 total += global_batch_size
-                
-       
+
         # make sure all processes have finished
         dist.barrier()
         if rank == 0:
             paths = [save_dir, real_img_dir]
             kwargs = {'batch_size': 200, 'device': device, 'dims': 2048}
             fid = calculate_fid_given_paths(paths=paths, **kwargs)
-            print('FID = {}'.format(fid))
-            # with open(args.output_log, "a") as f:
-            #     f.write('Epoch = {}, FID = {}\n'.format(args.epoch_id, fid))
+            print('FID = {}, beta = {}'.format(fid, args.beta))
+            with open(args.output_log, "a") as f:
+                f.write('Epoch = {}, FID = {}, beta = {}\n'.format(args.epoch_id, fid, args.beta))
         dist.barrier()
         dist.destroy_process_group()
     else:
         print("Inference")
         with torch.no_grad():
-            fake_image = run_sampling(args.batch_size, generator)
+            # fake_image, traj, x0_seq = run_sampling(args.batch_size, generator, return_traj=True)
+            fake_image = run_sampling(args.batch_size, generator, return_traj=False)
         fake_image = torch.clamp(to_range_0_1(fake_image), 0, 1)
         if not args.use_karras_samplers:
-            if args.trunc is not None:
-                trunc = args.trunc
-            else:
-                trunc = 0
-            if args.stochastic:
-                sample_type = "stoch"
-            else:
-                sample_type = "deter"
-            save_path = './samples_{}_{}_{}_{}_{}'.format(args.dataset, args.method, args.num_steps, trunc, sample_type)
+            save_path = 'samples_{}_{}_{}_{}'.format(args.dataset, args.method, args.atol, args.rtol)
         else:
-            save_path = './samples_{}_{}_{}'.format(args.dataset, args.method, args.num_steps)
+            save_path = 'samples_{}_{}_{}'.format(args.dataset, args.method, args.num_steps)
         if args.num_classes:
             save_path += "_cls{}_cfg{}".format(cls_index, args.cfg_scale)
+        if args.stochastic:
+            save_path += f"_stochastic{args.beta}"
+            # save_path += f"_stochasticnewv2{args.beta}"
+            # save_path += f"_stochasticgamma{args.beta}"
         save_path += ".jpg"
 
-        torchvision.utils.save_image(fake_image, save_path, padding=0, nrow=3)
-        print("Samples are save at '{}".format(save_path))
+        torchvision.utils.save_image(fake_image, save_path, padding=0, nrow=4)
+        # torchvision.utils.save_image(x0_seq, save_path.split(".")[0] + "_x0pred.jpg", normalize=True, nrow=4)
+        # torchvision.utils.save_image(traj, save_path.split(".")[0] + "_traj.jpg", normalize=True, nrow=4)
+        print("Samples are saved at '{}".format(save_path))
 
 
 if __name__ == '__main__':
@@ -296,7 +359,7 @@ if __name__ == '__main__':
     parser.add_argument('--measure_time', action='store_true', default=False,
                             help='wheter or not measure time')
     parser.add_argument('--epoch_id', type=int,default=1000)
-    parser.add_argument('--n_sample', type=int, default=10000,
+    parser.add_argument('--n_sample', type=int, default=50000,
                             help='number of sampled images')
 
     parser.add_argument('--model_type', type=str, default="adm",
@@ -349,7 +412,7 @@ if __name__ == '__main__':
     parser.add_argument("--resblock_updown", type=bool, default=False)
     parser.add_argument("--use_new_attention_order", type=bool, default=False)
 
-    parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="stabilityai/sd-vae-ft-mse")
+    parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="../stabilityai/sd-vae-ft-mse")
     parser.add_argument('--output_log', type=str, default="")
 
     #######################################
@@ -358,6 +421,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='cifar10', help='name of dataset')
     parser.add_argument('--num_steps', type=int, default=40)
     parser.add_argument('--batch_size', type=int, default=200, help='sample generating batch size')
+    parser.add_argument('--exp_root_dir', default='reflow_consistency')
 
     # sampling argument
     parser.add_argument('--use_karras_samplers', action='store_true', default=False)
@@ -365,10 +429,12 @@ if __name__ == '__main__':
     parser.add_argument('--rtol', type=float, default=1e-5, help='absolute tolerance error')
     parser.add_argument('--method', type=str, default='dopri5', help='solver_method', choices=["dopri5", "dopri8", "adaptive_heun", "bosh3",
         "euler", "midpoint", "rk4", "heun", "multistep", "stochastic", "dpm"])
-    # parser.add_argument('--step_size', type=float, default=0.01, help='step_size')
+    parser.add_argument('--step_size', type=float, default=0.01, help='step_size')
     parser.add_argument('--perturb', action='store_true', default=False)
     parser.add_argument('--stochastic', action='store_true', default=False)
-    parser.add_argument('--trunc', type=float, default=None)
+    parser.add_argument('--beta', type=float, default=0., help='the level of stochasticity')
+    parser.add_argument('--faster_test', action='store_true', default=False)
+
     ###ddp
     parser.add_argument('--num_proc_node', type=int, default=1,
                         help='The number of nodes in multi node env.')
@@ -386,8 +452,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
-
+    try:
+        torch.multiprocessing.set_start_method('spawn')
+    except RuntimeError:
+        pass
     if size > 1 and args.compute_fid:
+        
         processes = []
         for rank in range(size):
             args.local_rank = rank

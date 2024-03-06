@@ -209,7 +209,7 @@ def train(rank, gpu, args):
     if args.model_ckpt:
         ckpt = torch.load(args.model_ckpt, map_location=device)
         model.load_state_dict(ckpt)
-    if args.resume:
+    if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
         checkpoint = torch.load(checkpoint_file, map_location=device)
         init_epoch = checkpoint['epoch']
@@ -319,8 +319,8 @@ def train(rank, gpu, args):
                 loss = con_loss.mean()
                 # reflow loss
                 if global_step > args.warm_up_con:
-                    # reflow_loss = batch_mse(reflow_z0_rescon, reflow_z0.detach())
-                    reflow_loss = huber_loss(reflow_z0_rescon, reflow_z0.detach())
+                    reflow_loss = batch_mse(reflow_z0_rescon, reflow_z0.detach())
+                    # reflow_loss = huber_loss(reflow_z0_rescon, reflow_z0.detach())
                     loss += args.scale_reflow*reflow_loss.mean()
                 # gan loss
                 if global_step > args.warm_up_gan and args.use_gan:

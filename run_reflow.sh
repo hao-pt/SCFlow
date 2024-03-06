@@ -3,7 +3,7 @@
 #SBATCH --output=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.out # create a output file
 #SBATCH --error=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.err # create a error file
 #SBATCH --partition=research # choose partition
-#SBATCH --gpus-per-node=1
+#SBATCH --gpus-per-node=2
 #SBATCH --cpus-per-gpu=16 # 80
 #SBATCH --mem-per-gpu=32GB
 #SBATCH --nodes=1
@@ -16,8 +16,8 @@
 
 set -x
 set -e
-export MASTER_PORT=6013
-NUM_GPUS=1
+export MASTER_PORT=6017
+NUM_GPUS=2
 
 module purge
 module load python/miniconda3/miniconda3
@@ -27,15 +27,15 @@ conda activate ../envs/flow1.8.1/
 
 ## celeb adm
 python train_consistent_flow_distill.py \
-	--exp celeb_adm_threshold1e-1_trunc4e-1_ema95e-2 \
-	--init_threshold 0.1 \
+	--exp celeb_adm_threshold2e-1_trunc4e-1 \
+	--init_threshold 2e-1 \
 	--trunc_threshold 0.4 \
 	--dataset celeba_256 \
 	--datadir ../data/celeba_256/celeba-lmdb/ \
 	--batch_size 32 \
 	--ch_mult 1 2 2 2 \
 	--attn_resolution 16 8 \
-	--target_ema_decay 0.95 \
+	--target_ema_decay 0.9 \
 	--master_port $MASTER_PORT \
 	--num_process_per_node $NUM_GPUS \
 	--num_sample_timesteps 4 \
