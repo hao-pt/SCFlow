@@ -11,6 +11,8 @@ __MACOSX/
 logs/
 *lmdb
 stabilityai/
+*generated*
+celeba_test/
 *.png
 *.jpg
 *.log

@@ -8,39 +8,75 @@
 import argparse
 import torch
 import numpy as np
-# from torchdiffeq import odeint
 from torchdiffeq import odeint_adjoint as odeint
-import ot
 import os
+from einops import rearrange
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision
-from datasets_prep import get_dataset
+from datasets_prep.coco import CocoImagesAndCaptionsTrain, CocoImagesAndCaptionsValidation
+from datasets_prep.ade20k import ADE20kTrain, ADE20kValidation
+from datasets_prep.celeb_mask import CelebAMaskTrain, CelebAMaskValidation
 from models.util import get_flow_model
-
 from torch.multiprocessing import Process
 import torch.distributed as dist
 import shutil
-
-
+from models.encoder import SpatialRescaler
+from omegaconf import OmegaConf
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
-            
+
+
+def to_rgb(x):
+    x = x.float()
+    colorize = torch.randn(3, x.shape[1], 1, 1).to(x)
+    x = nn.functional.conv2d(x, weight=colorize)
+    x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
+    return x
+
+
+
+def get_weight(model):
+    param_size = 0
+    for param in model.parameters():
+        param_size += param.nelement() * param.element_size()
+    buffer_size = 0
+    for buffer in model.buffers():
+        buffer_size += buffer.nelement() * buffer.element_size()
+
+    size_all_mb = (param_size + buffer_size) / 1024**2
+    return size_all_mb
+    
+class WrapperCondFlow(nn.Module):
+    def __init__(self, model, cond):
+        super().__init__()
+        self.model = model
+        self.cond = cond
+    
+    def forward(self, t, x):
+        x = torch.cat([x, self.cond], 1)
+        return self.model(t, x)
+
+
 def broadcast_params(params):
     for param in params:
         dist.broadcast(param.data, src=0)
 
-def sample_from_model(model, x_0):
+def sample_from_model(model, z_0):
+    # how to pass the cond
     t = torch.tensor([1., 0.], device="cuda")
-    fake_image = odeint(model, x_0, t, atol=1e-5, rtol=1e-5)
+    fake_image = odeint(model, z_0, t, atol=1e-8, rtol=1e-8)
     return fake_image
 
 #%%
 def train(rank, gpu, args):
     
     from EMA import EMA
+    from diffusers.models import AutoencoderKL
     
     torch.manual_seed(args.seed + rank)
     torch.cuda.manual_seed(args.seed + rank)
@@ -49,7 +85,17 @@ def train(rank, gpu, args):
     
     batch_size = args.batch_size
     
-    dataset = get_dataset(args)
+    if args.dataset == "coco":
+        dataset = CocoImagesAndCaptionsTrain(size=256, onehot_segmentation=True, use_stuffthing=True)
+        num_cls = 182
+    elif args.dataset == "ade20k":
+        dataset = ADE20kTrain(size=256, crop_size=256, random_crop=False)
+        num_cls = 151
+    elif args.dataset == "celeba":
+        dataset = CelebAMaskTrain(size=256, crop_size=256)
+        num_cls = 19
+    
+    
     train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
                                                                     num_replicas=args.world_size,
                                                                     rank=rank)
@@ -60,10 +106,24 @@ def train(rank, gpu, args):
                                                pin_memory=True,
                                                sampler=train_sampler,
                                                drop_last = True)
-    
+    args.layout = False
     model = get_flow_model(args).to(device)
+    first_stage_model = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").to(device)
+    first_stage_model = first_stage_model.eval()
+    first_stage_model.train = False
+    for param in first_stage_model.parameters():
+        param.requires_grad = False
+    
+    cond_stage_model = SpatialRescaler(n_stages=3, in_channels=num_cls, out_channels=4, multiplier=0.5).to(device)
+        
+    print('AutoKL size: {:.3f}MB'.format(get_weight(first_stage_model)))
+    print('Spatical rescaler size: {:.3f}MB'.format(get_weight(cond_stage_model)))
+    print('FM size: {:.3f}MB'.format(get_weight(model)))
+        
     broadcast_params(model.parameters())
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, betas = (args.beta1, args.beta2))
+    broadcast_params(cond_stage_model.parameters())
+    
+    optimizer = optim.AdamW(list(model.parameters())+list(cond_stage_model.parameters()), lr=args.lr, weight_decay=0.0)
     
     if args.use_ema:
         optimizer = EMA(optimizer, ema_decay=args.ema_decay)
@@ -71,15 +131,18 @@ def train(rank, gpu, args):
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.num_epoch, eta_min=1e-5)
     
     #ddp
-    model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu],find_unused_parameters=True)
-
+    model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu],find_unused_parameters=False)
+    cond_stage_model = nn.parallel.DistributedDataParallel(cond_stage_model, device_ids=[gpu],find_unused_parameters=False)
+    
     exp = args.exp
-    parent_dir = "./saved_info/flow_matching/{}".format(args.dataset)
-
+    parent_dir = "./saved_info/latent_flow_mask2image/{}".format(args.dataset)
+        
     exp_path = os.path.join(parent_dir, exp)
     if rank == 0:
         if not os.path.exists(exp_path):
             os.makedirs(exp_path)
+            config_dict = vars(args)
+            OmegaConf.save(config_dict, os.path.join(exp_path, "config.yaml"))
     
     if args.resume:
         checkpoint_file = os.path.join(exp_path, 'content.pth')
@@ -87,12 +150,14 @@ def train(rank, gpu, args):
         init_epoch = checkpoint['epoch']
         epoch = init_epoch
         model.load_state_dict(checkpoint['model_dict'])
+        cond_stage_model.load_state_dict(checkpoint['cond_stage_model_dict'])
         # load G
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
-        
+        global_step = checkpoint["global_step"]
         print("=> loaded checkpoint (epoch {})"
                   .format(checkpoint['epoch']))
+        del checkpoint
     else:
         global_step, epoch, init_epoch = 0, 0, 0
     
@@ -100,55 +165,52 @@ def train(rank, gpu, args):
     for epoch in range(init_epoch, args.num_epoch+1):
         train_sampler.set_epoch(epoch)
        
-        for iteration, (x, y) in enumerate(data_loader):
-            x_1 = x.to(device, non_blocking=True)
+        for iteration, (image, segmentation) in enumerate(data_loader):
+            segmentation = torch.nn.functional.one_hot(segmentation, num_cls).permute(0, 3, 1, 2)
+            seg = segmentation.to(device, non_blocking=True).float()
+            x_1 = image.to(device, non_blocking=True)
             model.zero_grad()
-            #sample t
-            t = torch.rand((x_1.size(0),), device=device)
+            with torch.no_grad():
+                z_1 = first_stage_model.encode(x_1).latent_dist.sample().mul_(args.scale_factor)
+                c = cond_stage_model(seg)
+            #sample t            
+            t = torch.rand((z_1.size(0),) , device=device)
             t = t.view(-1, 1, 1, 1)
-            x_0 = torch.randn_like(x_1)
-
-            # Minibatch OT in multisample flow matching (Pooladian et al 2023)
-            if args.minibatch_ot:
-                # ot.dist only works with (n_samples, n_features) tensor, therefore we use flatten
-                M = ot.dist(x_1.flatten(1), x_0.flatten(1))
-                M = M / M.max()  # normalize
-                # we assume data and noise on uniform weights
-                a, b = torch.ones(batch_size) / batch_size, torch.ones(batch_size) / batch_size
-                Pi = ot.emd(a, b, M)  # unregularized OT plan, equivalent to permutation matrix 
-                # with OT plan we can define which noise matched with which sample
-                matched_indices = torch.where(Pi != 0)[1]
-                sorted_x_0 = x_0[torch.sort(matched_indices)[1]]
-                v_t = (1 - t) * x_1 + (1e-5 + (1 - 1e-5) * t) * sorted_x_0
-                u = (1 - 1e-5) * sorted_x_0 - x_1
-            else:
-                v_t = (1 - t) * x_1 + (1e-5 + (1 - 1e-5) * t) * x_0
-                u = (1 - 1e-5) * x_0 - x_1
+            z_0 = torch.randn_like(z_1)
+            v_t = (1 - t) * z_1 + (1e-5 + (1 - 1e-5) * t) * z_0
+            u = (1 - 1e-5) * z_0 - z_1
+                        
+            v_t_semantic = torch.cat((v_t, c), dim=1)
             
-            loss = F.mse_loss(model(t.squeeze(), v_t), u)
+            loss = F.mse_loss(model(t.squeeze(), v_t_semantic), u)
             loss.backward()
             optimizer.step()
-            
             global_step += 1
             if iteration % 100 == 0:
                 if rank == 0:
-                    print('epoch {} iteration{}, Loss: {}'.format(epoch,iteration, loss.item()))
-        
+                    print('epoch {} iteration{}, Loss: {}'.format(epoch,iteration, loss.item()))            
+
         if not args.no_lr_decay:
             scheduler.step()
         
         if rank == 0:
-            rand = torch.randn_like(x_1)
-            fake_sample = sample_from_model(model, rand)[-1]
-            
-            torchvision.utils.save_image(fake_sample, os.path.join(exp_path, 'sample_epoch_{}.png'.format(epoch)), normalize=True)
-            
+            with torch.no_grad():
+                rand = torch.randn_like(z_1)[:4]
+                seg = seg[:4]
+                c = cond_stage_model(seg)
+                model_cond = WrapperCondFlow(model, c)
+                fake_sample = sample_from_model(model_cond, rand)[-1]
+                fake_image = first_stage_model.decode(fake_sample / args.scale_factor).sample
+            torchvision.utils.save_image(to_rgb(seg), os.path.join(exp_path, 'image_epoch_seg_{}.png'.format(epoch)), normalize=True)
+            torchvision.utils.save_image(fake_image, os.path.join(exp_path, 'image_epoch_{}.png'.format(epoch)), normalize=True)
+            torchvision.utils.save_image(image[:4], os.path.join(exp_path, 'image_epoch_{}_gt.png'.format(epoch)), normalize=True)
+            del fake_image, fake_sample, model_cond, c
             if args.save_content:
                 if epoch % args.save_content_every == 0:
                     print('Saving content.')
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'model_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
-                               'scheduler': scheduler.state_dict()}
+                               'scheduler': scheduler.state_dict(), "cond_stage_model_dict": cond_stage_model.state_dict()}
                     
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
                 
@@ -157,6 +219,7 @@ def train(rank, gpu, args):
                     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
                     
                 torch.save(model.state_dict(), os.path.join(exp_path, 'model_{}.pth'.format(epoch)))
+                torch.save(cond_stage_model.state_dict(), os.path.join(exp_path, 'cond_stage_model_{}.pth'.format(epoch)))
                 if args.use_ema:
                     optimizer.swap_parameters_with_ema(store_params_in_ema=True)
             
@@ -165,7 +228,7 @@ def train(rank, gpu, args):
 def init_processes(rank, size, fn, args):
     """ Initialize the distributed environment. """
     os.environ['MASTER_ADDR'] = args.master_address
-    os.environ['MASTER_PORT'] = '6021'
+    os.environ['MASTER_PORT'] = args.master_port
     torch.cuda.set_device(args.local_rank)
     gpu = args.local_rank
     dist.init_process_group(backend='nccl', init_method='env://', rank=rank, world_size=size)
@@ -183,11 +246,13 @@ if __name__ == '__main__':
     
     parser.add_argument('--resume', action='store_true',default=False)
     
-    parser.add_argument('--image_size', type=int, default=32,
+    parser.add_argument('--image_size', type=int, default=256,
                             help='size of image')
-    parser.add_argument('--num_in_channels', type=int, default=3,
+    parser.add_argument('--scale_factor', type=float, default=0.18215,
+                            help='size of image')
+    parser.add_argument('--num_in_channels', type=int, default=8,
                             help='in channel image')
-    parser.add_argument('--num_out_channels', type=int, default=3,
+    parser.add_argument('--num_out_channels', type=int, default=4,
                             help='in channel image')
     parser.add_argument('--nf', type=int, default=256,
                             help='channel of image')
@@ -202,9 +267,9 @@ if __name__ == '__main__':
                             help='number of head upsample')
     parser.add_argument('--num_head_channels', type=int, default=-1,
                             help='number of head channels')
-    parser.add_argument('--attn_resolutions', nargs='+', type=int, default=(16,),
+    parser.add_argument('--attn_resolutions', nargs='+', type=int, default=(8,4),
                             help='resolution of applying attention')
-    parser.add_argument('--ch_mult', nargs='+', type=int, default=(1,1,2,2,4,4),
+    parser.add_argument('--ch_mult', nargs='+', type=int, default=(1,2,3,4),
                             help='channel mult')
     parser.add_argument('--dropout', type=float, default=0.,
                             help='drop-out rate')
@@ -221,9 +286,9 @@ if __name__ == '__main__':
     parser.add_argument('--num_timesteps', type=int, default=200)
 
     parser.add_argument('--batch_size', type=int, default=128, help='input batch size')
-    parser.add_argument('--num_epoch', type=int, default=1200)
+    parser.add_argument('--num_epoch', type=int, default=500)
 
-    parser.add_argument('--lr', type=float, default=5e-4, help='learning rate g')
+    parser.add_argument('--lr', type=float, default=5e-5, help='learning rate g')
     
     parser.add_argument('--beta1', type=float, default=0.5,
                             help='beta1 for adam')
@@ -237,7 +302,7 @@ if __name__ == '__main__':
     
 
     parser.add_argument('--save_content', action='store_true',default=False)
-    parser.add_argument('--save_content_every', type=int, default=50, help='save content for resuming every x epochs')
+    parser.add_argument('--save_content_every', type=int, default=10, help='save content for resuming every x epochs')
     parser.add_argument('--save_ckpt_every', type=int, default=25, help='save ckpt every x epochs')
    
     ###ddp
@@ -251,8 +316,12 @@ if __name__ == '__main__':
                         help='rank of process in the node')
     parser.add_argument('--master_address', type=str, default='127.0.0.1',
                         help='address for master')
+    parser.add_argument('--master_port', type=str, default='6255',
+                        help='address for master')
 
-   
+
+    # torch.multiprocessing.set_start_method('spawn', force=True)# good solution !!!!
+
     args = parser.parse_args()
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
@@ -273,5 +342,4 @@ if __name__ == '__main__':
             p.join()
     else:
         print('starting in debug mode')
-        
         init_processes(0, size, train, args)

@@ -86,7 +86,8 @@ def sample_from_model2(model, x, model_kwargs, generator, args):
 
 def sample_and_test(rank, gpu, args):
     from diffusers.models import AutoencoderKL
-    # torch.backends.cuda.matmul.allow_tf32 = True
+    if args.faster_test:
+        torch.backends.cuda.matmul.allow_tf32 = True
     torch.set_grad_enabled(False)
 
     seed = args.seed + rank
@@ -117,11 +118,17 @@ def sample_and_test(rank, gpu, args):
     model = create_network(args).to(device)
     first_stage_model = AutoencoderKL.from_pretrained(args.pretrained_autoencoder_ckpt).to(device)
 
-    ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+    if not args.load_ema:
+        ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+        ckpt = ckpt.get("ema_model", ckpt)
+    else:
+        ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_ema{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
     print("Finish loading model")
     #loading weights from ddp in single gpu
-    for key in list(ckpt.keys()):
-        ckpt[key[7:]] = ckpt.pop(key)
+    if "module" in list(ckpt.keys())[0]:
+        for key in list(ckpt.keys()):
+            ckpt[key[7:]] = ckpt.pop(key)
+            # ckpt[key[17:]] = ckpt.pop(key)
     model.load_state_dict(ckpt, strict=True)
     model.eval()
 
@@ -131,6 +138,8 @@ def sample_and_test(rank, gpu, args):
     save_dir = "./generated_samples/{}/exp{}_ep{}_m{}".format(args.dataset, args.exp, args.epoch_id, args.method)
     if args.method in FIXER_SOLVER:
         save_dir += "_s{}".format(args.num_steps)
+    if args.num_classes:
+        save_dir += "_cfg{}".format(args.cfg_scale)
 
     if rank == 0 and not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -351,7 +360,7 @@ if __name__ == '__main__':
     parser.add_argument("--resblock_updown", type=bool, default=False)
     parser.add_argument("--use_new_attention_order", type=bool, default=False)
 
-    parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="stabilityai/sd-vae-ft-mse")
+    parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="../stabilityai/sd-vae-ft-mse")
     parser.add_argument('--output_log', type=str, default="")
 
     #######################################
@@ -360,6 +369,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='cifar10', help='name of dataset')
     parser.add_argument('--num_steps', type=int, default=40)
     parser.add_argument('--batch_size', type=int, default=200, help='sample generating batch size')
+    parser.add_argument('--load_ema', action='store_true', default=False)
+    parser.add_argument('--faster_test', action='store_true', default=False)
 
     # sampling argument
     parser.add_argument('--use_karras_samplers', action='store_true', default=False)
@@ -388,6 +399,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
+
+    try:
+        torch.multiprocessing.set_start_method('spawn')
+    except RuntimeError:
+        pass
 
     if size > 1 and args.compute_fid:
         processes = []

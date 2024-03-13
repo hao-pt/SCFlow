@@ -28,6 +28,7 @@ from models import create_network, create_discriminator
 from EMA import EMA, EMAMODEL
 from sampler.karras_sample import karras_sample
 from distill.flows import ConsistencyFlow
+from pseudo_huber import PseudoHuberLoss
 
 
 class LossRecord:
@@ -209,6 +210,13 @@ def train(rank, gpu, args):
     if args.model_ckpt:
         ckpt = torch.load(args.model_ckpt, map_location=device)
         model.load_state_dict(ckpt)
+        # for param in model.parameters():
+        #     param.requires_grad = False
+        teacher = copy.deepcopy(model)
+        teacher.eval()
+    else:
+        teacher = None
+
     if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
         checkpoint_file = os.path.join(exp_path, 'content.pth')
         checkpoint = torch.load(checkpoint_file, map_location=device)
@@ -533,6 +541,7 @@ if __name__ == '__main__':
 
     # distill
     parser.add_argument('--num_sample_timesteps', type=int, default=10)
+
 
     # discriminator
     parser.add_argument('--lrD', type=float, default=1e-4, help='learning rate d')
