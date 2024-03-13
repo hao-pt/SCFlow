@@ -38,20 +38,20 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 MODEL_TYPE=adm
 EPOCH_ID=450
 DATASET=celeba_256
-EXP=discrete # celeb256_f8_adm_3
+EXP= # celeb256_f8_adm_3
 METHOD=dopri5
 STEPS=0
 USE_ORIGIN_ADM=True
 
 if [[ ${USE_ORIGIN_ADM} == True ]]; then
     python test_flow_latent.py --exp ${EXP} \
-        --dataset ${DATASET} --batch_size 32 --epoch_id ${EPOCH_ID} \
+        --dataset ${DATASET} --batch_size 4 --epoch_id ${EPOCH_ID} \
         --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
         --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
         --use_origin_adm \
-        --master_port $MASTER_PORT --num_process_per_node 3 \
+        --master_port $MASTER_PORT --num_process_per_node 1 \
         --method ${METHOD} --num_steps ${STEPS} \
-        --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
+        # --compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \
         # --num_head_channels 64 \
         # --use_karras_samplers \
         # --measure_time \

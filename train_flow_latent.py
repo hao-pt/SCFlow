@@ -28,7 +28,8 @@ from models import create_network
 from EMA import EMA, EMAMODEL
 
 from models.augment import AugmentPipe
-from stochastic_flow import stochastic_forward
+from stochastic_flow import stochastic_forward, sigmoid_schedule
+from pseudo_huber import huber_loss
 
 
 def copy_source(file, output_dir):
@@ -68,9 +69,9 @@ def train(rank, gpu, args):
     exp = args.exp
     parent_dir = "./saved_info/latent_flow/{}".format(args.dataset)
     exp_path = os.path.join(parent_dir, exp)
-    if rank == 0:
-        if not os.path.exists(exp_path):
-            os.makedirs(exp_path)
+    if not os.path.exists(exp_path):
+        os.makedirs(exp_path)
+        if rank == 0:
             config_dict = vars(args)
             OmegaConf.save(config_dict, os.path.join(exp_path, "config.yaml"))
 
@@ -167,8 +168,9 @@ def train(rank, gpu, args):
     else:
         global_step, epoch, init_epoch = 0, 0, 0
 
-    ema.ema_step(decay_rate=0, model=model.module) # remember to remove
+    # ema.ema_step(decay_rate=0, model=model.module) # remember to remove
 
+    loss_fn = F.mse_loss if args.loss_fn == "mse" else huber_loss
     use_label = True if "imagenet" in args.dataset else False
     is_latent_data = True if "latent" in args.dataset else False
     start_time = time()
@@ -201,7 +203,12 @@ def train(rank, gpu, args):
             z_t, u, t = stochastic_forward(z_t, u, t, form=args.gamma_form)
 
             v = model(t.squeeze(), z_t, y) # augment_labels)
-            loss = F.mse_loss(v, u)
+            if args.weighting_loss:
+                weighting_func = lambda t: (1+4*(t - t**2))
+                loss = weighting_func(t.squeeze()) * loss_fn(v, u, reduction="none").mean(dim=[1,2,3])
+                loss = loss.mean()
+            else:
+                loss = loss_fn(v, u)
             loss.backward()
             optimizer.step()
             global_step += 1
@@ -318,6 +325,9 @@ if __name__ == '__main__':
                             help='weight decay')
     parser.add_argument('--gamma_form', type=str, default="none",
                             help='gamma form in stochastic forward', choices=['none', 'log', 'sin'])
+    parser.add_argument('--weighting_loss', action='store_true')
+    parser.add_argument('--loss_fn', type=str, default="mse",
+                            help='loss function', choices=['mse', 'huber'])
 
     # Original ADM
     parser.add_argument('--layout', action='store_true')
@@ -335,7 +345,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_head_channels', type=int, default=-1,
                             help='number of head channels')
 
-    parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="../stabilityai/sd-vae-ft-ema")
+    parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="../stabilityai/sd-vae-ft-mse")
 
     # training
     parser.add_argument('--exp', default='experiment_cifar_default', help='name of experiment')

@@ -69,5 +69,16 @@ def compute_d_gamma(t, x_shape, form="constant"):
 def stochastic_forward(xt, u, t, form="none"):
     perturbation = th.randn_like(xt)
     xt = xt + compute_gamma(t, xt.shape, form) * perturbation
-    ut = u + compute_d_gamma(t, xt.shape, form) * perturbation
+    ut = u # + compute_d_gamma(t, xt.shape, form) * perturbation
     return xt, ut, t
+
+
+def sigmoid_schedule(t, start=-3, end=3, tau=1.0, clip_min=1e-9):
+    def sigmoid(x):
+        return 1./(1 + np.exp(-x))
+    # A gamma function based on sigmoid function.
+    v_start = sigmoid(start / tau)
+    v_end = sigmoid(end / tau)
+    output = sigmoid((t * (end - start) + start) / tau)
+    output = (v_end - output) / (v_end - v_start)
+    return th.clamp(output, clip_min, 1.)

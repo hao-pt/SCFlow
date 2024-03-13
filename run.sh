@@ -17,8 +17,9 @@
 set -x
 set -e
 
-export MASTER_PORT=10114
+export MASTER_PORT=10121
 export WORLD_SIZE=1
+NUM_GPUS=1
 
 export SLURM_JOB_NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | tr '\n' ' ')
 export SLURM_NODELIST=$SLURM_JOB_NODELIST
@@ -33,15 +34,17 @@ echo "NODELIST="${SLURM_NODELIST}
 export NCCL_DEBUG=INFO
 export PYTHONFAULTHANDLER=1
 
-# module purge
-# module load python/miniconda3/miniconda3
-# eval "$(conda shell.bash hook)"
-# conda activate ../envs/flow_pytorch2/
+module purge
+module load python/miniconda3/miniconda3
+eval "$(conda shell.bash hook)"
+
+# conda activate ../envs/flow_pytorch2.2/
+conda activate ../envs/flow1.8.1/
 
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
 ############################################### ADM ~ CelebA 256 ###############################################
-CUDA_VISIBLE_DEVICES=0 python train_flow_latent.py --exp celeba_f8_adm_lr2e-5_gammalog \
+python train_flow_latent.py --exp celeba_f8_adm_lr2e-5_huber1e-2 \
     --dataset celeba_256 --datadir ../data/celeba_256/celeba-lmdb \
     --batch_size 64 --num_epoch 600 \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
@@ -53,10 +56,11 @@ CUDA_VISIBLE_DEVICES=0 python train_flow_latent.py --exp celeba_f8_adm_lr2e-5_ga
     --use_ema \
     --no_lr_decay \
     --save_ckpt_every 5 \
-    --gamma_form log \
+    --num_process_per_node $NUM_GPUS \
+    --loss_fn huber \
+    # --gamma_form log \
     # --dropout 0.1 \
     # --model_ckpt saved_info/latent_flow/celeba_256/celeb256_f8_adm/model_450.pth \
-    # --augment 0.15 \
     # --num_head_channels 64 \
 
 # # --multi_gpu 
@@ -161,7 +165,7 @@ CUDA_VISIBLE_DEVICES=0 python train_flow_latent.py --exp celeba_f8_adm_lr2e-5_ga
 
 
 ############################################### DiT-L/2 ~ CelebA 256 ###############################################
-# CUDA_VISIBLE_DEVICES=1 python train_flow_latent.py --exp celeb_f8_dit_lr2e-5_gammalog \
+# python train_flow_latent.py --exp celeb_f8_dit_lr2e-5_weighting \
 #     --dataset celeba_256 --datadir ../data/celeba_256/celeba-lmdb/ \
 #     --batch_size 32 --num_epoch 500 \
 #     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
@@ -170,12 +174,13 @@ CUDA_VISIBLE_DEVICES=0 python train_flow_latent.py --exp celeba_f8_adm_lr2e-5_ga
 #     --model_type DiT-L/2 --num_classes 1 --label_dropout 0. \
 #     --save_content --save_content_every 10 \
 #     --save_ckpt_every 5 \
-#     --master_port $MASTER_PORT --num_process_per_node 1 \
+#     --master_port $MASTER_PORT --num_process_per_node $NUM_GPUS \
 #     --faster_training \
-#     --dropout 0.1 \
 #     --use_ema \
+#     --weighting_loss \
 #     --compile \
-#     --gamma_form log \
+#     # --gamma_form log \
+#     # --dropout 0.1 \
 #     # --model_ckpt /lustre/scratch/client/scratch/research/group/anhgroup/haopt12/cnf_flow/public_models/celeb_f8_dit/model_475.pth \
 
 

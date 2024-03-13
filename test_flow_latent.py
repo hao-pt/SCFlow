@@ -137,13 +137,15 @@ def sample_and_test(rank, gpu, args):
 
     if not args.load_ema:
         ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
+        ckpt = ckpt.get("ema_model", ckpt)
     else:
         ckpt = torch.load('./saved_info/latent_flow/{}/{}/model_ema{}.pth'.format(args.dataset, args.exp, args.epoch_id), map_location=device)
     print("Finish loading model")
     #loading weights from ddp in single gpu
-    for key in list(ckpt.keys()):
-        ckpt[key[7:]] = ckpt.pop(key)
-        # ckpt[key[17:]] = ckpt.pop(key)
+    if "module" in list(ckpt.keys())[0]:
+        for key in list(ckpt.keys()):
+            ckpt[key[7:]] = ckpt.pop(key)
+            # ckpt[key[17:]] = ckpt.pop(key)
     model.load_state_dict(ckpt, strict=True)
     model.eval()
 
@@ -390,7 +392,7 @@ if __name__ == '__main__':
     parser.add_argument("--resblock_updown", type=bool, default=False)
     parser.add_argument("--use_new_attention_order", type=bool, default=False)
 
-    parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="stabilityai/sd-vae-ft-mse")
+    parser.add_argument('--pretrained_autoencoder_ckpt', type=str, default="../stabilityai/sd-vae-ft-mse")
     parser.add_argument('--output_log', type=str, default="")
 
     #######################################

@@ -17,10 +17,10 @@ slurm_template = """#!/bin/bash -e
 #SBATCH --mail-user=v.haopt12@vinai.io
 #SBATCH --ntasks=1
 
-# module purge
-# module load python/miniconda3/miniconda3
-# eval "$(conda shell.bash hook)"
-# conda activate ../envs/flow_pytorch2/
+module purge
+module load python/miniconda3/miniconda3
+eval "$(conda shell.bash hook)"
+conda activate {env_path}
 
 export MASTER_PORT={master_port}
 export WORLD_SIZE=1
@@ -40,40 +40,61 @@ echo "----------------------------"
 echo $MODEL_TYPE $EPOCH_ID $DATASET $EXP {method} {num_steps}
 echo "----------------------------"
 
+# CUDA_VISIBLE_DEVICES={device} python test_flow_latent.py --exp $EXP \
+#     --dataset $DATASET --batch_size 128 --epoch_id $EPOCH_ID \
+#     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
+#     --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
+#     --model_type $MODEL_TYPE \
+#     --method {method} --num_steps {num_steps} \
+#     --master_port $MASTER_PORT  --num_process_per_node {num_gpus} \
+#     --n_sample 50_000 \
+#     --cfg_scale {cfg_scale} \
+#     --compute_fid --output_log $OUTPUT_LOG \
+#     --faster_test \
+#     --num_classes 1 \
+#     # --load_ema \
+#     # --num_classes 1000 --label_dim 1000 --label_dropout 0.15 \
+#     # --measure_time \
+#     # --num_head_channels 64 \
+#     # --use_karras_samplers \
+
 CUDA_VISIBLE_DEVICES={device} python test_flow_latent.py --exp $EXP \
-    --dataset $DATASET --batch_size 1 --epoch_id $EPOCH_ID \
+    --dataset $DATASET --batch_size 128 --epoch_id $EPOCH_ID \
     --image_size 256 --f 8 --num_in_channels 4 --num_out_channels 4 \
-    --nf 256 --ch_mult 1 2 3 4 --attn_resolution 16 8 4 --num_res_blocks 2 \
+    --nf 256 --ch_mult 1 2 2 2 --attn_resolution 16 8 --num_res_blocks 2 \
     --model_type $MODEL_TYPE \
     --method {method} --num_steps {num_steps} \
     --master_port $MASTER_PORT  --num_process_per_node {num_gpus} \
     --n_sample 50_000 \
-    --num_classes 1000 --label_dim 1000 --label_dropout 0.15 \
     --cfg_scale {cfg_scale} \
-    --measure_time \
-    --faster_test \
-    # --compute_fid --output_log $OUTPUT_LOG \
-    # --use_origin_adm \
+    --compute_fid --output_log $OUTPUT_LOG \
+    --use_origin_adm \
+    # --faster_test \
+    # --num_classes 1 \
     # --load_ema \
+    # --num_classes 1000 --label_dim 1000 --label_dropout 0.15 \
+    # --measure_time \
     # --num_head_channels 64 \
     # --use_karras_samplers \
+
 
 
 """
 
 ###### ARGS
+env_path = ["../envs/flow1.8.1/", "../envs/flow_pytorch2.2/"][0]
 model_type = ["DiT-L/2", "adm", "DiT-B/2"][1]
-dataset = ["celeba_256", "ffhq_256", "imagenet_256"][-1]
-exp = "imnet_f8_adm" 
-BASE_PORT = 8018
-num_gpus = 0
-device = "0" #,2,3,4,5,6,7"
+dataset = ["celeba_256", "ffhq_256", "imagenet_256"][0]
+exp = "celeba_f8_adm_lr2e-5_huber1e-2" 
+BASE_PORT = 8025
+num_gpus = 1
+device = "0," #,2,3,4,5,6,7"
 
 config = pd.DataFrame({
-    "epochs": [1125]*2,
-    "num_steps": [0]*2,
-    "methods": ['dopri5']*2,
-    "cfg_scale": [1.25, 1.5],
+    "epochs": [450],
+    "num_steps": [0],
+    "methods": ['dopri5'],
+    "cfg_scale": [1.],
 })
 print(config)
 
@@ -101,6 +122,7 @@ for idx, row in config.iterrows():
         num_steps=row.num_steps,
         device=device,
         cfg_scale=row.cfg_scale,
+        env_path=env_path,
     )
     mode = "w" if idx == 0 else "a"
     with open(slurm_file_path, mode) as f:
