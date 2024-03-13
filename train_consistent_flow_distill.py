@@ -318,7 +318,7 @@ def train(rank, gpu, args):
                 con_loss = huber_loss(curr_z0, post_z0)
                 loss = con_loss.mean()
                 # reflow loss
-                if global_step > args.warm_up_con:
+                if global_step > args.warm_up_reflow:
                     reflow_loss = batch_mse(reflow_z0_rescon, reflow_z0.detach())
                     # reflow_loss = huber_loss(reflow_z0_rescon, reflow_z0.detach())
                     loss += args.scale_reflow*reflow_loss.mean()
@@ -341,7 +341,7 @@ def train(rank, gpu, args):
                 #     loss += Gloss
                 con_loss = batch_mse(curr_z0, post_z0)
                 loss = con_loss.mean()
-                if global_step >= args.warm_up_con:
+                if global_step >= args.warm_up_reflow:
                     # reflow
                     # _loss = batch_mse(reflow_z0_rescon, reflow_z0.detach())
                     reflow_loss = batch_mse(curr_z0, z0)
@@ -385,7 +385,7 @@ def train(rank, gpu, args):
                                 epoch,
                                 iteration, 
                                 loss.item(),
-                                0 if global_step <= args.warm_up_con else reflow_loss.mean().item(), 
+                                0 if global_step <= args.warm_up_reflow else reflow_loss.mean().item(), 
                                 con_loss.mean().item(), 
                                 Gloss.item(),
                                 Dloss.item(),
@@ -395,7 +395,7 @@ def train(rank, gpu, args):
                             epoch,
                             iteration, 
                             loss.item(), 
-                            0 if global_step <= args.warm_up_con else reflow_loss.mean().item(), 
+                            0 if global_step <= args.warm_up_reflow else reflow_loss.mean().item(), 
                             con_loss.mean().item(), 
                             steps_per_sec))
                     start_time = time()
@@ -561,7 +561,7 @@ if __name__ == '__main__':
     # consistency + gan
     parser.add_argument('--init_threshold', type=float, default=0.2, help='training threshold')
     parser.add_argument('--trunc_threshold', type=float, default=0.5, help='training threshold')
-    parser.add_argument('--warm_up_con', type=int, default=0, help='warm up consistency loss')
+    parser.add_argument('--warm_up_reflow', type=int, default=0, help='warm up consistency loss')
     parser.add_argument('--warm_up_gan', type=int, default=0, help='warm up consistency loss')
     parser.add_argument('--warm_up_inverse', type=int, default=0, help='warm up consistency loss')
     parser.add_argument('--warm_up_flow', type=int, default=0, help='warm up flow matching loss')

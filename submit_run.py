@@ -34,8 +34,8 @@ def main():
             run_job(args.cmd)
             break
         else:
-            logging.debug("Waiting for 60 seconds")
-            time.sleep(60)
+            logging.debug("Waiting for 180 seconds")
+            time.sleep(180)
 
 
 if __name__ == "__main__":

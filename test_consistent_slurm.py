@@ -64,10 +64,10 @@ CUDA_VISIBLE_DEVICES={device} python test_consistent_flow.py --exp $EXP \
 ###### ARGS
 model_type = ["DiT-L/2", "adm"][1]
 dataset = ["celeba_256", "ffhq_256"][0]
-exp = "celeb_adm_threshold5e-2_trunc4e-1_huberall" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1" # "celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_notrunct_huber0.01" # ["celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_notrunct_huber0.01", "celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan_notrunct", "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct", "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher"][-1]
+exp = "celeb_adm_threshold1e-1_trunc4e-1_scale1x2_gan1e-1" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct_gan_huber0.1" # "celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_notrunct_huber0.01" # ["celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_notrunct_huber0.01", "celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan_notrunct", "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_notrunct", "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_skipteacher"][-1]
 # "con_fm" #  "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip1_gan" # ""celeba_f8_adm_lr2e-5_100steps_ema0._fmloss_skip20_gan" # "celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_warmup15k" # "celeba_f8_adm_lr2e-5_100steps_ema0.95_fmloss_skip20_gan_songbound0.2_warmup15k" # "# "celeba_f8_dit_lr1e-4_100steps_ema0.95_fmloss_skip20_gan_skipteacher"  "celeba_f8_adm_lr2e-5_100steps_ema0.9_fmloss_skip30_gan_skipteacher"
 exp_root_dir = ["ct_flow", "cd_flow", "reflow_consistency"][-1]
-BASE_PORT = 8026
+BASE_PORT = 8032
 num_gpus = 2
 device = "0,1" #,2,3,4,5,6,7"
 

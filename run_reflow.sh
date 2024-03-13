@@ -1,7 +1,7 @@
 #!/bin/sh
-#SBATCH --job-name=distill # create a short name for your job
-#SBATCH --output=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.out # create a output file
-#SBATCH --error=/lustre/scratch/client/vinai/users/haopt12/cnf_flow/slurms/slurm_%A.err # create a error file
+#SBATCH --job-name=rf01 # create a short name for your job
+#SBATCH --output=/lustre/scratch/client/vinai/users/haopt12/flow_distill/slurms/slurm_%A.out # create a output file
+#SBATCH --error=/lustre/scratch/client/vinai/users/haopt12/flow_distill/slurms/slurm_%A.err # create a error file
 #SBATCH --partition=research # choose partition
 #SBATCH --gpus-per-node=2
 #SBATCH --cpus-per-gpu=16 # 80
@@ -16,19 +16,19 @@
 
 set -x
 set -e
-export MASTER_PORT=6017
+export MASTER_PORT=6033
 NUM_GPUS=2
 
-module purge
-module load python/miniconda3/miniconda3
-eval "$(conda shell.bash hook)"
-conda activate ../envs/flow1.8.1/
-# conda activate ../envs/flow_pytorch2.2/
+# module purge
+# module load python/miniconda3/miniconda3
+# eval "$(conda shell.bash hook)"
+# conda activate ../envs/flow1.8.1/
+# # conda activate ../envs/flow_pytorch2.2/
 
 ## celeb adm
 python train_consistent_flow_distill.py \
-	--exp celeb_adm_threshold2e-1_trunc4e-1 \
-	--init_threshold 2e-1 \
+	--exp celeb_adm_threshold1e-1_trunc4e-1_scale1e-1x2_rf1 \
+	--init_threshold 0.1 \
 	--trunc_threshold 0.4 \
 	--dataset celeba_256 \
 	--datadir ../data/celeba_256/celeba-lmdb/ \
@@ -39,7 +39,7 @@ python train_consistent_flow_distill.py \
 	--master_port $MASTER_PORT \
 	--num_process_per_node $NUM_GPUS \
 	--num_sample_timesteps 4 \
-	--warm_up_con 0 \
+	--warm_up_reflow 0 \
 	--warm_up_gan 1_000 \
 	--warm_up_inverse 1_000 \
 	--num_epoch 200 \
@@ -50,7 +50,9 @@ python train_consistent_flow_distill.py \
 	--lrD 1e-4 --d_base_channels 16384 --d_temb_channels 256 --r1_gamma 1. \
 	--use_origin_adm \
 	--use_gan \
-    # --scale_reflow 1. \
+        --scale_inverse 0.1 \
+        --scale_gan 0.1 \
+        --scale_reflow 1 \
 
 ## celeb dit
 # python train_consistent_flow_distill.py \
