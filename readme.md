@@ -116,6 +116,8 @@ Detailed arguments and checkpoints are provided below:
 
 Remaining models are put at [here](https://drive.google.com/drive/folders/1sJhl9gR0H4cIQJ3rVjJAqcOHZ8jpNVte?usp=sharing).
 > All attached links are made by an anonymous account.
+>
+All models: https://drive.google.com/file/d/1_6HlS_tTKBrvlHDQiVYsMyREBlIL6Nvg/view?usp=drive_link
 
 Please put downloaded pre-trained models in `saved_info/latent_flow/<DATASET>/<EXP>` directory where `<DATASET>` is defined as in [bash_scripts/run.sh](./bash_scripts/run.sh).
 
