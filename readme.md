@@ -111,33 +111,17 @@ Download pre-computed dataset stats for CelebA-HQ dataset [here](https://drive.g
 
 ## Checkpoints
 
-### Pretrained Teacher Models
-
-<table>
-  <tr>
-    <th>Model</th>
-    <th>FID</th>
-    <th>Download</th>
-  </tr>
-  <tr>
-    <td>celeba_f8_adm</td>
-    <td>5.67</td>
-    <td><a href="https://drive.google.com/file/d/1AIuMr5Ewti6_wQAJdM9elsrERwrxI9Sb/view?usp=drive_link">model_480.pth</a></td>
-  </tr>
-    <tr>
-    <td>XCLiu/instaflow_0_9B_from_sd_1_5</td>
-    <td>13.10</td>
-    <td><a href="https://huggingface.co/XCLiu/instaflow_0_9B_from_sd_1_5">XCLiu/instaflow_0_9B_from_sd_1_5</a></td>
-  </tr>
-</table>
-
-To download all checkpoints at once, run:
-
-```shell
-bash tools/download_pretrained.sh
+To download pretrained teacher checkpoints:
+```bash
+bash tools/download_teacher.sh
 ```
 
-Checkpoints will be saved under the `pretrained/` folder.
+To download our distilled checkpoints:
+```bash
+bash tools/download_distilled.sh
+```
+
+All checkpoints are saved under the `pretrained/` folder.
 
 ## Inference
 

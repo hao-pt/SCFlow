@@ -14,4 +14,4 @@ echo "==> Downloading InstaFlow teacher checkpoint from HuggingFace..."
 huggingface-cli download XCLiu/instaflow_0_9B_from_sd_1_5 \
     --local-dir pretrained/InstaFlow
 
-echo "Done. Checkpoints saved under pretrained/."
+echo "Done. Teacher checkpoints saved under pretrained/."
