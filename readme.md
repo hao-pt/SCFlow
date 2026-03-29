@@ -59,6 +59,10 @@ Details of the model architecture and experimental results can be found in [our 
 
 Please **CITE** our paper and give us a :star: whenever this repository is used to help produce published results or incorporated into other software.
 
+
+TODO:
+- [] add our pretrained checkpoints
+
 ---
 
 ## Installation
