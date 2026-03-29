@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES=0 accelerate launch --mixed_precision="bf16" --num_processes=1 --main_process_port="31282" sd_distill/train.py \
+accelerate launch --mixed_precision="bf16" --num_processes=2 --main_process_port="31282" sd_distill/train.py \
         --pretrained_model_name_or_path pretrained/InstaFlow/ \
         --dataset_type "encoded" \
         --train_data_dir data/latent_laion_aes \

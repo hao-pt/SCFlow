@@ -14,6 +14,7 @@
   <sup>3</sup>Cornell University
   <br> <br>
   <a href="https://arxiv.org/abs/2412.16906">[Paper]</a>
+  <a href="https://huggingface.co/haopt/scflow_t2i">[HuggingFace <img src="https://huggingface.co/front/assets/huggingface_logo.svg" width=20>]</a> &emsp;&emsp;
   <br> <br>
   <emp><sup>*</sup>Equal contribution</emp> &emsp;
   <emp><sup>†</sup>Work done while at VinAI Research</emp>
@@ -30,8 +31,6 @@
 <details>
 <summary><b>Table of Contents</b></summary>
 
-- [Abstract](#abstract)
-- [Method](#method)
 - [Installation](#installation)
 - [Data](#data)
 - [Checkpoints](#checkpoints)
@@ -101,7 +100,7 @@ python sd_distill/precomputed_data.py \
     --datadir laion/aesthetics_v2_6_5plus \
     --cache_dir ./data/laion_aesthetics_v2_6_5plus \
     --save_path ./data/laion_aesthetics_v2_6_5plus/latent_laion_aes/ \
-    --num_samples 200 \
+    --num_samples 2_000_000 \
     --batch_size 64
 ```
 
