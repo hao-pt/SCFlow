@@ -1,0 +1,39 @@
+CUDA_VISIBLE_DEVICES=0 accelerate launch --mixed_precision="bf16" --num_processes=1 --main_process_port="31282" sd_distill/train.py \
+        --pretrained_model_name_or_path pretrained/InstaFlow/ \
+        --dataset_type "encoded" \
+        --train_data_dir data/latent_laion_aes \
+        --resolution 512 \
+        --validation_prompts "Self-portrait oil painting, a beautiful cyborg with golden hair, 8k" "Astronaut in a jungle, cold color palette, muted colors, detailed, 8k" "portrait photo of a girl, photograph, highly detailed face, depth of field, moody light, golden hour, style by Dan Winters, Russell James, Steve McCurry, centered, extremely detailed, Nikon D850, award winning photography" "A photo of beautiful mountain with realistic sunset and blue lake, highly detailed, masterpiece" "A racoon wearing formal clothes, wearing a tophat. Oil painting in the style of Rembrandt" "a zoomed out DSLR photo of a hippo biting through a watermelon" \
+        --num_validation_images 2 \
+        --validation_steps 2000 \
+        --num_sample_timesteps 4 \
+        --output_dir saved_info/scflow-laion2m-thr1e-1_trunc1e-1_cfg1.5 \
+        --train_batch_size 20 \
+        --gradient_accumulation_steps 1 \
+        --guidance_scale 1.5 \
+        --learning_rate 1.e-05 \
+        --learning_rate_disc 1.e-05 \
+        --lr_scheduler "constant" \
+        --lr_warmup_steps 0 \
+        --target_ema_unet_decay 0.9 \
+        --time_init_threshold 1e-1 \
+        --trunc_threshold 1e-1 \
+        --num_train_epochs 20 \
+        --gan_lamb 0.1 \
+        --inv_lamb 0.1 \
+        --reflow_lamb 0.1 \
+        --warmup_reflow 0 \
+        --warmup_gan 500 \
+        --warmup_inverse 500 \
+        --checkpointing_steps 3000 \
+        --seed 0 \
+        --set_grads_to_none \
+        --dataloader_num_workers 4 \
+        --allow_tf32 \
+        --gradient_checkpointing \
+        --use_ema \
+        --use_gan \
+        --r1_gamma 0 \
+        --use_sd_discriminator \
+        --plot_teacher_samples
+        # --resume_from_checkpoint 'latest' \

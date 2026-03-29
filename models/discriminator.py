@@ -1,40 +1,37 @@
-import math
+import functools
+
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn.functional import silu
+from torch import nn
 
-from torch_utils import misc
-from torch_utils import persistence
+from torch_utils import misc, persistence
+from torch_utils.ops import bias_act, conv2d_resample, upfirdn2d
 
 # from .EDM import Conv2d, Linear
 # from .EDM import PositionalEmbedding
 # from .EDM import MappingNetwork
-
 from .guided_diffusion.nn import timestep_embedding
 
-from torch_utils.ops import conv2d_resample
-from torch_utils.ops import upfirdn2d
-from torch_utils.ops import bias_act
-
-
-
-import functools
 # from taming.modules.util import ActNorm
+
+
+def normalize_2nd_moment(x, dim=1, eps=1e-8):
+    return x * (x.square().mean(dim=dim, keepdim=True) + eps).rsqrt()
 
 
 def weights_init(m):
     classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
+    if classname.find("Conv") != -1:
         nn.init.normal_(m.weight.data, 0.0, 0.02)
-    elif classname.find('BatchNorm') != -1:
+    elif classname.find("BatchNorm") != -1:
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
 
+
 class ActNorm(nn.Module):
-    def __init__(self, num_features, logdet=False, affine=True,
-                 allow_reverse_init=False):
+    def __init__(
+        self, num_features, logdet=False, affine=True, allow_reverse_init=False,
+    ):
         assert affine
         super().__init__()
         self.logdet = logdet
@@ -42,7 +39,7 @@ class ActNorm(nn.Module):
         self.scale = nn.Parameter(torch.ones(1, num_features, 1, 1))
         self.allow_reverse_init = allow_reverse_init
 
-        self.register_buffer('initialized', torch.tensor(0, dtype=torch.uint8))
+        self.register_buffer("initialized", torch.tensor(0, dtype=torch.uint8))
 
     def initialize(self, input):
         with torch.no_grad():
@@ -69,7 +66,7 @@ class ActNorm(nn.Module):
         if reverse:
             return self.reverse(input)
         if len(input.shape) == 2:
-            input = input[:,:,None,None]
+            input = input[:, :, None, None]
             squeeze = True
         else:
             squeeze = False
@@ -87,7 +84,7 @@ class ActNorm(nn.Module):
 
         if self.logdet:
             log_abs = torch.log(torch.abs(self.scale))
-            logdet = height*width*torch.sum(log_abs)
+            logdet = height * width * torch.sum(log_abs)
             logdet = logdet * torch.ones(input.shape[0]).to(input)
             return h, logdet
 
@@ -98,14 +95,13 @@ class ActNorm(nn.Module):
             if not self.allow_reverse_init:
                 raise RuntimeError(
                     "Initializing ActNorm in reverse direction is "
-                    "disabled by default. Use allow_reverse_init=True to enable."
+                    "disabled by default. Use allow_reverse_init=True to enable.",
                 )
-            else:
-                self.initialize(output)
-                self.initialized.fill_(1)
+            self.initialize(output)
+            self.initialized.fill_(1)
 
         if len(output.shape) == 2:
-            output = output[:,:,None,None]
+            output = output[:, :, None, None]
             squeeze = True
         else:
             squeeze = False
@@ -116,10 +112,12 @@ class ActNorm(nn.Module):
             h = h.squeeze(-1).squeeze(-1)
         return h
 
+
 class NLayerDiscriminator(nn.Module):
     """Defines a PatchGAN discriminator as in Pix2Pix
-        --> see https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/models/networks.py
+    --> see https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/models/networks.py
     """
+
     def __init__(self, input_nc=3, ndf=64, n_layers=4, use_actnorm=True):
         """Construct a PatchGAN discriminator
         Parameters:
@@ -128,42 +126,60 @@ class NLayerDiscriminator(nn.Module):
             n_layers (int)  -- the number of conv layers in the discriminator
             norm_layer      -- normalization layer
         """
-        super(NLayerDiscriminator, self).__init__()
+        super().__init__()
         if not use_actnorm:
             norm_layer = nn.BatchNorm2d
         else:
             norm_layer = ActNorm
-        if type(norm_layer) == functools.partial:  # no need to use bias as BatchNorm2d has affine parameters
+        if isinstance(
+            norm_layer, functools.partial,
+        ):  # no need to use bias as BatchNorm2d has affine parameters
             use_bias = norm_layer.func != nn.BatchNorm2d
         else:
             use_bias = norm_layer != nn.BatchNorm2d
 
         kw = 4
         padw = 1
-        sequence = [nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw), 
-                    nn.LeakyReLU(0.2, False)
-                    ]
+        sequence = [
+            nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw),
+            nn.LeakyReLU(0.2, False),
+        ]
         nf_mult = 1
         nf_mult_prev = 1
         for n in range(1, n_layers):  # gradually increase the number of filters
             nf_mult_prev = nf_mult
-            nf_mult = min(2 ** n, 8)
+            nf_mult = min(2**n, 8)
             sequence += [
-                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias),
+                nn.Conv2d(
+                    ndf * nf_mult_prev,
+                    ndf * nf_mult,
+                    kernel_size=kw,
+                    stride=2,
+                    padding=padw,
+                    bias=use_bias,
+                ),
                 # norm_layer(ndf * nf_mult),
-                nn.LeakyReLU(0.2, False)
+                nn.LeakyReLU(0.2, False),
             ]
 
         nf_mult_prev = nf_mult
-        nf_mult = min(2 ** n_layers, 8)
+        nf_mult = min(2**n_layers, 8)
         sequence += [
-            nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
+            nn.Conv2d(
+                ndf * nf_mult_prev,
+                ndf * nf_mult,
+                kernel_size=kw,
+                stride=1,
+                padding=padw,
+                bias=use_bias,
+            ),
             # norm_layer(ndf * nf_mult),
-            nn.LeakyReLU(0.2, False)
+            nn.LeakyReLU(0.2, False),
         ]
 
         sequence += [
-            nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]  # output 1 channel prediction map
+            nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw),
+        ]  # output 1 channel prediction map
         self.main = nn.Sequential(*sequence)
 
     def forward(self, input, c):
@@ -180,7 +196,7 @@ class TimestepEmbedding(nn.Module):
 
         self.main = nn.Sequential(
             FullyConnectedLayer(embedding_dim, hidden_dim, activation=act),
-            FullyConnectedLayer(hidden_dim, output_dim)
+            FullyConnectedLayer(hidden_dim, output_dim),
         )
 
     def forward(self, temp):
@@ -190,29 +206,36 @@ class TimestepEmbedding(nn.Module):
 
 
 # Discriminator blocks
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+
 
 @persistence.persistent_class
 class DiscriminatorBlock(torch.nn.Module):
-    def __init__(self,
-        in_channels,                        # Number of input channels, 0 = first block.
-        tmp_channels,                       # Number of intermediate channels.
-        out_channels,                       # Number of output channels.
-        resolution,                         # Resolution of this block.
-        img_channels,                       # Number of input color channels.
-        first_layer_idx,                    # Index of the first layer.
-        architecture        = 'resnet',     # Architecture: 'orig', 'skip', 'resnet'.
-        activation          = 'lrelu',      # Activation function: 'relu', 'lrelu', etc.
-        resample_filter     = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
-        conv_clamp          = None,         # Clamp the output of convolution layers to +-X, None = disable clamping.
-        use_fp16            = False,        # Use FP16 for this block?
-        fp16_channels_last  = False,        # Use channels-last memory format with FP16?
-        freeze_layers       = 0,            # Freeze-D: Number of layers to freeze.
-        temb_dim            = None,         # Dimensionality of time embedding
+    def __init__(
+        self,
+        in_channels,  # Number of input channels, 0 = first block.
+        tmp_channels,  # Number of intermediate channels.
+        out_channels,  # Number of output channels.
+        resolution,  # Resolution of this block.
+        img_channels,  # Number of input color channels.
+        first_layer_idx,  # Index of the first layer.
+        architecture="resnet",  # Architecture: 'orig', 'skip', 'resnet'.
+        activation="lrelu",  # Activation function: 'relu', 'lrelu', etc.
+        resample_filter=[
+            1,
+            3,
+            3,
+            1,
+        ],  # Low-pass filter to apply when resampling activations.
+        conv_clamp=None,  # Clamp the output of convolution layers to +-X, None = disable clamping.
+        use_fp16=False,  # Use FP16 for this block?
+        fp16_channels_last=False,  # Use channels-last memory format with FP16?
+        freeze_layers=0,  # Freeze-D: Number of layers to freeze.
+        temb_dim=None,  # Dimensionality of time embedding
         # init                = {},           # Initial parameters of conv layers
     ):
         assert in_channels in [0, tmp_channels]
-        assert architecture in ['orig', 'skip', 'resnet']
+        assert architecture in ["orig", "skip", "resnet"]
         super().__init__()
         self.in_channels = in_channels
         self.resolution = resolution
@@ -220,8 +243,8 @@ class DiscriminatorBlock(torch.nn.Module):
         self.first_layer_idx = first_layer_idx
         self.architecture = architecture
         self.use_fp16 = use_fp16
-        self.channels_last = (use_fp16 and fp16_channels_last)
-        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
+        self.channels_last = use_fp16 and fp16_channels_last
+        self.register_buffer("resample_filter", upfirdn2d.setup_filter(resample_filter))
         # f = torch.as_tensor(resample_filter, dtype=torch.float32)
         # f = f.ger(f).unsqueeze(0).unsqueeze(1) / f.sum().square()
         # self.register_buffer('resample_filter', f)
@@ -231,69 +254,124 @@ class DiscriminatorBlock(torch.nn.Module):
             self.time_dense = FullyConnectedLayer(temb_dim, tmp_channels)
 
         self.num_layers = 0
+
         def trainable_gen():
             while True:
                 layer_idx = self.first_layer_idx + self.num_layers
-                trainable = (layer_idx >= freeze_layers)
+                trainable = layer_idx >= freeze_layers
                 self.num_layers += 1
                 yield trainable
+
         trainable_iter = trainable_gen()
 
-        if in_channels == 0 or architecture == 'skip':
-            self.fromrgb = Conv2dLayer(img_channels, tmp_channels, kernel_size=1, activation=activation,
-                trainable=next(trainable_iter), conv_clamp=conv_clamp, channels_last=self.channels_last)
+        if in_channels == 0 or architecture == "skip":
+            self.fromrgb = Conv2dLayer(
+                img_channels,
+                tmp_channels,
+                kernel_size=1,
+                activation=activation,
+                trainable=next(trainable_iter),
+                conv_clamp=conv_clamp,
+                channels_last=self.channels_last,
+            )
             # self.fromrgb = Conv2d(img_channels, tmp_channels, kernel=1, **init)
             # self.fromrgb = nn.Conv2d(img_channels, tmp_channels, kernel=1, **init)
 
-        self.conv0 = Conv2dLayer(tmp_channels, tmp_channels, kernel_size=3, activation=activation,
-            trainable=next(trainable_iter), conv_clamp=conv_clamp, channels_last=self.channels_last)
+        self.conv0 = Conv2dLayer(
+            tmp_channels,
+            tmp_channels,
+            kernel_size=3,
+            activation=activation,
+            trainable=next(trainable_iter),
+            conv_clamp=conv_clamp,
+            channels_last=self.channels_last,
+        )
         # self.conv0 = Conv2d(tmp_channels, tmp_channels, kernel=3, **init)
 
-        self.conv1 = Conv2dLayer(tmp_channels, out_channels, kernel_size=3, activation=activation, down=2,
-            trainable=next(trainable_iter), resample_filter=resample_filter, conv_clamp=conv_clamp, channels_last=self.channels_last)
+        self.conv1 = Conv2dLayer(
+            tmp_channels,
+            out_channels,
+            kernel_size=3,
+            activation=activation,
+            down=2,
+            trainable=next(trainable_iter),
+            resample_filter=resample_filter,
+            conv_clamp=conv_clamp,
+            channels_last=self.channels_last,
+        )
         # self.conv1 = Conv2d(tmp_channels, out_channels, kernel=3, down=True, resample_filter=resample_filter, **init)
 
-        if architecture == 'resnet':
-            self.skip = Conv2dLayer(tmp_channels, out_channels, kernel_size=1, bias=False, down=2,
-                trainable=next(trainable_iter), resample_filter=resample_filter, channels_last=self.channels_last)
+        if architecture == "resnet":
+            self.skip = Conv2dLayer(
+                tmp_channels,
+                out_channels,
+                kernel_size=1,
+                bias=False,
+                down=2,
+                trainable=next(trainable_iter),
+                resample_filter=resample_filter,
+                channels_last=self.channels_last,
+            )
             # self.skip = Conv2d(tmp_channels, out_channels, kernel=1, bias=False, down=True, resample_filter=resample_filter, **init)
-    
+
     def downsample2d(self, x):
-        f = self.resample_filter.to(x.dtype) if self.resample_filter is not None else None
+        f = (
+            self.resample_filter.to(x.dtype)
+            if self.resample_filter is not None
+            else None
+        )
         f_pad = (f.shape[-1] - 1) // 2 if f is not None else 0
-        x = torch.nn.functional.conv2d(x, f.tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=f_pad)
-        
+        x = torch.nn.functional.conv2d(
+            x,
+            f.tile([self.in_channels, 1, 1, 1]),
+            groups=self.in_channels,
+            stride=2,
+            padding=f_pad,
+        )
+
         return x
 
     def forward(self, x, img, temb=None, force_fp32=False):
         dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
-        memory_format = torch.channels_last if self.channels_last and not force_fp32 else torch.contiguous_format
+        memory_format = (
+            torch.channels_last
+            if self.channels_last and not force_fp32
+            else torch.contiguous_format
+        )
         # Input.
         if x is not None:
-            misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution])
+            misc.assert_shape(
+                x, [None, self.in_channels, self.resolution, self.resolution],
+            )
             x = x.to(dtype=dtype, memory_format=memory_format)
 
         # FromRGB.
-        if self.in_channels == 0 or self.architecture == 'skip':
-            misc.assert_shape(img, [None, self.img_channels, self.resolution, self.resolution])
+        if self.in_channels == 0 or self.architecture == "skip":
+            misc.assert_shape(
+                img, [None, self.img_channels, self.resolution, self.resolution],
+            )
             img = img.to(dtype=dtype, memory_format=memory_format)
             y = self.fromrgb(img)
             x = x + y if x is not None else y
-            img = upfirdn2d.downsample2d(img, self.resample_filter) if self.architecture == 'skip' else None
+            img = (
+                upfirdn2d.downsample2d(img, self.resample_filter)
+                if self.architecture == "skip"
+                else None
+            )
             # img = self.downsample2d(img) if self.architecture == 'skip' else None
-        
+
         if temb is not None:
             temb = self.time_dense(temb)[..., None, None]
 
         # Main layers.
-        if self.architecture == 'resnet':
+        if self.architecture == "resnet":
             y = self.skip(x, gain=np.sqrt(0.5))
             # y = self.skip(x) * np.sqrt(0.5)
-            
+
             x = self.conv0(x)
             if temb is not None:
                 x += temb
-            x = (self.conv1(x, gain=np.sqrt(0.5)))
+            x = self.conv1(x, gain=np.sqrt(0.5))
             # x = silu(self.conv1(x) * np.sqrt(0.5))
             x = y.add_(x)
         else:
@@ -305,7 +383,9 @@ class DiscriminatorBlock(torch.nn.Module):
         # assert x.dtype == dtype
         return x, img
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 @persistence.persistent_class
 class MinibatchStdLayer(torch.nn.Module):
@@ -316,38 +396,49 @@ class MinibatchStdLayer(torch.nn.Module):
 
     def forward(self, x):
         N, C, H, W = x.shape
-        with misc.suppress_tracer_warnings(): # as_tensor results are registered as constants
-            G = torch.min(torch.as_tensor(self.group_size), torch.as_tensor(N)) if self.group_size is not None else N
+        with (
+            misc.suppress_tracer_warnings()
+        ):  # as_tensor results are registered as constants
+            G = (
+                torch.min(torch.as_tensor(self.group_size), torch.as_tensor(N))
+                if self.group_size is not None
+                else N
+            )
         F = self.num_channels
         c = C // F
 
-        y = x.reshape(G, -1, F, c, H, W)    # [GnFcHW] Split minibatch N into n groups of size G, and channels C into F groups of size c.
-        y = y - y.mean(dim=0)               # [GnFcHW] Subtract mean over group.
-        y = y.square().mean(dim=0)          # [nFcHW]  Calc variance over group.
-        y = (y + 1e-8).sqrt()               # [nFcHW]  Calc stddev over group.
-        y = y.mean(dim=[2,3,4])             # [nF]     Take average over channels and pixels.
-        y = y.reshape(-1, F, 1, 1)          # [nF11]   Add missing dimensions.
-        y = y.repeat(G, 1, H, W)            # [NFHW]   Replicate over group and pixels.
-        x = torch.cat([x, y], dim=1)        # [NCHW]   Append to input as new channels.
+        y = x.reshape(
+            G, -1, F, c, H, W,
+        )  # [GnFcHW] Split minibatch N into n groups of size G, and channels C into F groups of size c.
+        y = y - y.mean(dim=0)  # [GnFcHW] Subtract mean over group.
+        y = y.square().mean(dim=0)  # [nFcHW]  Calc variance over group.
+        y = (y + 1e-8).sqrt()  # [nFcHW]  Calc stddev over group.
+        y = y.mean(dim=[2, 3, 4])  # [nF]     Take average over channels and pixels.
+        y = y.reshape(-1, F, 1, 1)  # [nF11]   Add missing dimensions.
+        y = y.repeat(G, 1, H, W)  # [NFHW]   Replicate over group and pixels.
+        x = torch.cat([x, y], dim=1)  # [NCHW]   Append to input as new channels.
         return x
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 @persistence.persistent_class
 class DiscriminatorEpilogue(torch.nn.Module):
-    def __init__(self,
-        in_channels,                    # Number of input channels.
-        cmap_dim,                       # Dimensionality of mapped conditioning label, 0 = no label.
-        resolution,                     # Resolution of this block.
-        img_channels,                   # Number of input color channels.
-        architecture        = 'resnet', # Architecture: 'orig', 'skip', 'resnet'.
-        mbstd_group_size    = 4,        # Group size for the minibatch standard deviation layer, None = entire minibatch.
-        mbstd_num_channels  = 1,        # Number of features for the minibatch standard deviation layer, 0 = disable.
-        activation          = 'lrelu',  # Activation function: 'relu', 'lrelu', etc.
-        conv_clamp          = None,     # Clamp the output of convolution layers to +-X, None = disable clamping.
+    def __init__(
+        self,
+        in_channels,  # Number of input channels.
+        cmap_dim,  # Dimensionality of mapped conditioning label, 0 = no label.
+        resolution,  # Resolution of this block.
+        img_channels,  # Number of input color channels.
+        architecture="resnet",  # Architecture: 'orig', 'skip', 'resnet'.
+        mbstd_group_size=4,  # Group size for the minibatch standard deviation layer, None = entire minibatch.
+        mbstd_num_channels=1,  # Number of features for the minibatch standard deviation layer, 0 = disable.
+        activation="lrelu",  # Activation function: 'relu', 'lrelu', etc.
+        conv_clamp=None,  # Clamp the output of convolution layers to +-X, None = disable clamping.
         # init                = {},
     ):
-        assert architecture in ['orig', 'skip', 'resnet']
+        assert architecture in ["orig", "skip", "resnet"]
         super().__init__()
         self.in_channels = in_channels
         self.cmap_dim = cmap_dim
@@ -355,28 +446,48 @@ class DiscriminatorEpilogue(torch.nn.Module):
         self.img_channels = img_channels
         self.architecture = architecture
 
-        if architecture == 'skip':
-            self.fromrgb = Conv2dLayer(img_channels, in_channels, kernel_size=1, activation=activation)
+        if architecture == "skip":
+            self.fromrgb = Conv2dLayer(
+                img_channels, in_channels, kernel_size=1, activation=activation,
+            )
             # self.fromrgb = Conv2d(img_channels, in_channels, kernel=1, **init)
-        self.mbstd = MinibatchStdLayer(group_size=mbstd_group_size, num_channels=mbstd_num_channels) if mbstd_num_channels > 0 else None
-        self.conv = Conv2dLayer(in_channels + mbstd_num_channels, in_channels, kernel_size=3, activation=activation, conv_clamp=conv_clamp)
+        self.mbstd = (
+            MinibatchStdLayer(
+                group_size=mbstd_group_size, num_channels=mbstd_num_channels,
+            )
+            if mbstd_num_channels > 0
+            else None
+        )
+        self.conv = Conv2dLayer(
+            in_channels + mbstd_num_channels,
+            in_channels,
+            kernel_size=3,
+            activation=activation,
+            conv_clamp=conv_clamp,
+        )
         # self.conv = Conv2d(in_channels + mbstd_num_channels, in_channels, kernel=3, **init)
 
-        self.fc = FullyConnectedLayer(in_channels * (resolution ** 2), in_channels, activation=activation)
+        self.fc = FullyConnectedLayer(
+            in_channels * (resolution**2), in_channels, activation=activation,
+        )
         self.out = FullyConnectedLayer(in_channels, 1 if cmap_dim == 0 else cmap_dim)
         # self.fc = Linear(in_channels * (resolution ** 2), in_channels, **init)
         # self.out = Linear(in_channels, 1 if cmap_dim == 0 else cmap_dim)
 
     def forward(self, x, img, cmap, force_fp32=False):
-        misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution]) # [NCHW]
-        _ = force_fp32 # unused
+        misc.assert_shape(
+            x, [None, self.in_channels, self.resolution, self.resolution],
+        )  # [NCHW]
+        _ = force_fp32  # unused
         dtype = torch.float32
         memory_format = torch.contiguous_format
 
         # FromRGB.
         x = x.to(dtype=dtype, memory_format=memory_format)
-        if self.architecture == 'skip':
-            misc.assert_shape(img, [None, self.img_channels, self.resolution, self.resolution])
+        if self.architecture == "skip":
+            misc.assert_shape(
+                img, [None, self.img_channels, self.resolution, self.resolution],
+            )
             img = img.to(dtype=dtype, memory_format=memory_format)
             x = x + self.fromrgb(img)
 
@@ -395,34 +506,38 @@ class DiscriminatorEpilogue(torch.nn.Module):
         # assert x.dtype == dtype
         return x
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 @persistence.persistent_class
 class Discriminator(torch.nn.Module):
-    def __init__(self,
-        c_dim,                          # Conditioning label (C) dimensionality.
-        img_resolution,                 # Input resolution.
-        img_channels,                   # Number of input color channels.
-        architecture        = 'resnet', # Architecture: 'orig', 'skip', 'resnet'.
-        channel_base        = 32768,    # Overall multiplier for the number of channels.
-        channel_max         = 512,      # Maximum number of channels in any layer.
-        num_fp16_res        = 0,        # Use FP16 for the N highest resolutions.
-        conv_clamp          = None,     # Clamp the output of convolution layers to +-X, None = disable clamping.
-        cmap_dim            = None,     # Dimensionality of mapped conditioning label, None = default.
-        block_kwargs        = {},       # Arguments for DiscriminatorBlock.
-        mapping_kwargs      = {},       # Arguments for MappingNetwork.
-        epilogue_kwargs     = {},       # Arguments for DiscriminatorEpilogue.
-        temb_dim            = None,     # Dimensionality of time embeddings
+    def __init__(
+        self,
+        c_dim,  # Conditioning label (C) dimensionality.
+        img_resolution,  # Input resolution.
+        img_channels,  # Number of input color channels.
+        architecture="resnet",  # Architecture: 'orig', 'skip', 'resnet'.
+        channel_base=32768,  # Overall multiplier for the number of channels.
+        channel_max=512,  # Maximum number of channels in any layer.
+        num_fp16_res=0,  # Use FP16 for the N highest resolutions.
+        conv_clamp=None,  # Clamp the output of convolution layers to +-X, None = disable clamping.
+        cmap_dim=None,  # Dimensionality of mapped conditioning label, None = default.
+        block_kwargs={},  # Arguments for DiscriminatorBlock.
+        mapping_kwargs={},  # Arguments for MappingNetwork.
+        epilogue_kwargs={},  # Arguments for DiscriminatorEpilogue.
+        temb_dim=None,  # Dimensionality of time embeddings
     ):
         super().__init__()
         self.c_dim = c_dim
         self.img_resolution = img_resolution
         self.img_resolution_log2 = int(np.log2(img_resolution))
         self.img_channels = img_channels
-        self.block_resolutions = [2 ** i for i in range(self.img_resolution_log2, 2, -1)]
-        channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions + [4]}
-        fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
-        
+        self.block_resolutions = [2**i for i in range(self.img_resolution_log2, 2, -1)]
+        channels_dict = {
+            res: min(channel_base // res, channel_max)
+            for res in self.block_resolutions + [4]
+        }
         self.map_time = None
         if temb_dim is not None:
             self.map_time = TimestepEmbedding(
@@ -436,20 +551,44 @@ class Discriminator(torch.nn.Module):
         if c_dim == 0:
             cmap_dim = 0
 
-        common_kwargs = dict(img_channels=img_channels, architecture=architecture, conv_clamp=conv_clamp)
+        common_kwargs = dict(
+            img_channels=img_channels, architecture=architecture, conv_clamp=conv_clamp,
+        )
         cur_layer_idx = 0
         for res in self.block_resolutions:
             in_channels = channels_dict[res] if res < img_resolution else 0
             tmp_channels = channels_dict[res]
             out_channels = channels_dict[res // 2]
-            use_fp16 = False # (res >= fp16_resolution)
-            block = DiscriminatorBlock(in_channels, tmp_channels, out_channels, resolution=res,
-                first_layer_idx=cur_layer_idx, use_fp16=use_fp16, temb_dim=temb_dim, **block_kwargs, **common_kwargs)
-            setattr(self, f'b{res}', block)
+            use_fp16 = False  # (res >= fp16_resolution)
+            block = DiscriminatorBlock(
+                in_channels,
+                tmp_channels,
+                out_channels,
+                resolution=res,
+                first_layer_idx=cur_layer_idx,
+                use_fp16=use_fp16,
+                temb_dim=temb_dim,
+                **block_kwargs,
+                **common_kwargs,
+            )
+            setattr(self, f"b{res}", block)
             cur_layer_idx += block.num_layers
         if c_dim > 0:
-            self.mapping = MappingNetwork(z_dim=0, c_dim=c_dim, w_dim=cmap_dim, num_ws=None, w_avg_beta=None, **mapping_kwargs)
-        self.b4 = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, **epilogue_kwargs, **common_kwargs)
+            self.mapping = MappingNetwork(
+                z_dim=0,
+                c_dim=c_dim,
+                w_dim=cmap_dim,
+                num_ws=None,
+                w_avg_beta=None,
+                **mapping_kwargs,
+            )
+        self.b4 = DiscriminatorEpilogue(
+            channels_dict[4],
+            cmap_dim=cmap_dim,
+            resolution=4,
+            **epilogue_kwargs,
+            **common_kwargs,
+        )
 
     def forward(self, img, c, t=None, **block_kwargs):
         if t is not None and self.map_time is not None:
@@ -458,7 +597,7 @@ class Discriminator(torch.nn.Module):
             temb = None
         x = None
         for res in self.block_resolutions:
-            block = getattr(self, f'b{res}')
+            block = getattr(self, f"b{res}")
             x, img = block(x, img, temb=temb, **block_kwargs)
 
         cmap = None
@@ -468,23 +607,30 @@ class Discriminator(torch.nn.Module):
         return x
 
 
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 
 
 @persistence.persistent_class
 class FullyConnectedLayer(torch.nn.Module):
-    def __init__(self,
-        in_features,                # Number of input features.
-        out_features,               # Number of output features.
-        bias            = True,     # Apply additive bias before the activation function?
-        activation      = 'linear', # Activation function: 'relu', 'lrelu', etc.
-        lr_multiplier   = 1,        # Learning rate multiplier.
-        bias_init       = 0,        # Initial value for the additive bias.
+    def __init__(
+        self,
+        in_features,  # Number of input features.
+        out_features,  # Number of output features.
+        bias=True,  # Apply additive bias before the activation function?
+        activation="linear",  # Activation function: 'relu', 'lrelu', etc.
+        lr_multiplier=1,  # Learning rate multiplier.
+        bias_init=0,  # Initial value for the additive bias.
     ):
         super().__init__()
         self.activation = activation
-        self.weight = torch.nn.Parameter(torch.randn([out_features, in_features]) / lr_multiplier)
-        self.bias = torch.nn.Parameter(torch.full([out_features], np.float32(bias_init))) if bias else None
+        self.weight = torch.nn.Parameter(
+            torch.randn([out_features, in_features]) / lr_multiplier,
+        )
+        self.bias = (
+            torch.nn.Parameter(torch.full([out_features], np.float32(bias_init)))
+            if bias
+            else None
+        )
         self.weight_gain = lr_multiplier / np.sqrt(in_features)
         self.bias_gain = lr_multiplier
 
@@ -496,58 +642,78 @@ class FullyConnectedLayer(torch.nn.Module):
             if self.bias_gain != 1:
                 b = b * self.bias_gain
 
-        if self.activation == 'linear' and b is not None:
+        if self.activation == "linear" and b is not None:
             x = torch.addmm(b.unsqueeze(0), x, w.t())
         else:
             x = x.matmul(w.t())
             x = bias_act.bias_act(x, b, act=self.activation)
         return x
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+
 
 @persistence.persistent_class
 class Conv2dLayer(torch.nn.Module):
-    def __init__(self,
-        in_channels,                    # Number of input channels.
-        out_channels,                   # Number of output channels.
-        kernel_size,                    # Width and height of the convolution kernel.
-        bias            = True,         # Apply additive bias before the activation function?
-        activation      = 'linear',     # Activation function: 'relu', 'lrelu', etc.
-        up              = 1,            # Integer upsampling factor.
-        down            = 1,            # Integer downsampling factor.
-        resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
-        conv_clamp      = None,         # Clamp the output to +-X, None = disable clamping.
-        channels_last   = False,        # Expect the input to have memory_format=channels_last?
-        trainable       = True,         # Update the weights of this layer during training?
+    def __init__(
+        self,
+        in_channels,  # Number of input channels.
+        out_channels,  # Number of output channels.
+        kernel_size,  # Width and height of the convolution kernel.
+        bias=True,  # Apply additive bias before the activation function?
+        activation="linear",  # Activation function: 'relu', 'lrelu', etc.
+        up=1,  # Integer upsampling factor.
+        down=1,  # Integer downsampling factor.
+        resample_filter=[
+            1,
+            3,
+            3,
+            1,
+        ],  # Low-pass filter to apply when resampling activations.
+        conv_clamp=None,  # Clamp the output to +-X, None = disable clamping.
+        channels_last=False,  # Expect the input to have memory_format=channels_last?
+        trainable=True,  # Update the weights of this layer during training?
     ):
         super().__init__()
         self.activation = activation
         self.up = up
         self.down = down
         self.conv_clamp = conv_clamp
-        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
+        self.register_buffer("resample_filter", upfirdn2d.setup_filter(resample_filter))
         self.padding = kernel_size // 2
-        self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size ** 2))
+        self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size**2))
         self.act_gain = bias_act.activation_funcs[activation].def_gain
 
-        memory_format = torch.channels_last if channels_last else torch.contiguous_format
-        weight = torch.randn([out_channels, in_channels, kernel_size, kernel_size]).to(memory_format=memory_format)
+        memory_format = (
+            torch.channels_last if channels_last else torch.contiguous_format
+        )
+        weight = torch.randn([out_channels, in_channels, kernel_size, kernel_size]).to(
+            memory_format=memory_format,
+        )
         bias = torch.zeros([out_channels]) if bias else None
         if trainable:
             self.weight = torch.nn.Parameter(weight)
             self.bias = torch.nn.Parameter(bias) if bias is not None else None
         else:
-            self.register_buffer('weight', weight)
+            self.register_buffer("weight", weight)
             if bias is not None:
-                self.register_buffer('bias', bias)
+                self.register_buffer("bias", bias)
             else:
                 self.bias = None
 
     def forward(self, x, gain=1):
         w = self.weight * self.weight_gain
         b = self.bias.to(x.dtype) if self.bias is not None else None
-        flip_weight = (self.up == 1) # slightly faster
-        x = conv2d_resample.conv2d_resample(x=x, w=w.to(x.dtype), f=self.resample_filter.clone(), up=self.up, down=self.down, padding=self.padding, flip_weight=flip_weight)
+        flip_weight = self.up == 1  # slightly faster
+        x = conv2d_resample.conv2d_resample(
+            x=x,
+            w=w.to(x.dtype),
+            f=self.resample_filter.clone(),
+            up=self.up,
+            down=self.down,
+            padding=self.padding,
+            flip_weight=flip_weight,
+        )
 
         act_gain = self.act_gain * gain
         act_clamp = self.conv_clamp * gain if self.conv_clamp is not None else None
@@ -555,20 +721,22 @@ class Conv2dLayer(torch.nn.Module):
         return x
 
 
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+
 
 class MappingNetwork(torch.nn.Module):
-    def __init__(self,
-        z_dim,                      # Input latent (Z) dimensionality, 0 = no latent.
-        c_dim,                      # Conditioning label (C) dimensionality, 0 = no label.
-        w_dim,                      # Intermediate latent (W) dimensionality.
-        num_ws,                     # Number of intermediate latents to output, None = do not broadcast.
-        num_layers      = 8,        # Number of mapping layers.
-        embed_features  = None,     # Label embedding dimensionality, None = same as w_dim.
-        layer_features  = None,     # Number of intermediate features in the mapping layers, None = same as w_dim.
-        activation      = 'lrelu',  # Activation function: 'relu', 'lrelu', etc.
-        lr_multiplier   = 0.01,     # Learning rate multiplier for the mapping layers.
-        w_avg_beta      = 0.998,    # Decay for tracking the moving average of W during training, None = do not track.
+    def __init__(
+        self,
+        z_dim,  # Input latent (Z) dimensionality, 0 = no latent.
+        c_dim,  # Conditioning label (C) dimensionality, 0 = no label.
+        w_dim,  # Intermediate latent (W) dimensionality.
+        num_ws,  # Number of intermediate latents to output, None = do not broadcast.
+        num_layers=8,  # Number of mapping layers.
+        embed_features=None,  # Label embedding dimensionality, None = same as w_dim.
+        layer_features=None,  # Number of intermediate features in the mapping layers, None = same as w_dim.
+        activation="lrelu",  # Activation function: 'relu', 'lrelu', etc.
+        lr_multiplier=0.01,  # Learning rate multiplier for the mapping layers.
+        w_avg_beta=0.998,  # Decay for tracking the moving average of W during training, None = do not track.
     ):
         super().__init__()
         self.z_dim = z_dim
@@ -584,23 +752,32 @@ class MappingNetwork(torch.nn.Module):
             embed_features = 0
         if layer_features is None:
             layer_features = w_dim
-        features_list = [z_dim + embed_features] + [layer_features] * (num_layers - 1) + [w_dim]
+        features_list = (
+            [z_dim + embed_features] + [layer_features] * (num_layers - 1) + [w_dim]
+        )
 
         if c_dim > 0:
             self.embed = FullyConnectedLayer(c_dim, embed_features)
         for idx in range(num_layers):
             in_features = features_list[idx]
             out_features = features_list[idx + 1]
-            layer = FullyConnectedLayer(in_features, out_features, activation=activation, lr_multiplier=lr_multiplier)
-            setattr(self, f'fc{idx}', layer)
+            layer = FullyConnectedLayer(
+                in_features,
+                out_features,
+                activation=activation,
+                lr_multiplier=lr_multiplier,
+            )
+            setattr(self, f"fc{idx}", layer)
 
         if num_ws is not None and w_avg_beta is not None:
-            self.register_buffer('w_avg', torch.zeros([w_dim]))
+            self.register_buffer("w_avg", torch.zeros([w_dim]))
 
-    def forward(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
+    def forward(
+        self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False,
+    ):
         # Embed, normalize, and concat inputs.
         x = None
-        with torch.autograd.profiler.record_function('input'):
+        with torch.autograd.profiler.record_function("input"):
             if self.z_dim > 0:
                 misc.assert_shape(z, [None, self.z_dim])
                 x = normalize_2nd_moment(z.to(torch.float32))
@@ -611,33 +788,38 @@ class MappingNetwork(torch.nn.Module):
 
         # Main layers.
         for idx in range(self.num_layers):
-            layer = getattr(self, f'fc{idx}')
+            layer = getattr(self, f"fc{idx}")
             x = layer(x)
 
         # Update moving average of W.
         if update_emas and self.w_avg_beta is not None:
-            with torch.autograd.profiler.record_function('update_w_avg'):
-                self.w_avg.copy_(x.detach().mean(dim=0).lerp(self.w_avg, self.w_avg_beta))
+            with torch.autograd.profiler.record_function("update_w_avg"):
+                self.w_avg.copy_(
+                    x.detach().mean(dim=0).lerp(self.w_avg, self.w_avg_beta),
+                )
 
         # Broadcast.
         if self.num_ws is not None:
-            with torch.autograd.profiler.record_function('broadcast'):
+            with torch.autograd.profiler.record_function("broadcast"):
                 x = x.unsqueeze(1).repeat([1, self.num_ws, 1])
 
         # Apply truncation.
         if truncation_psi != 1:
-            with torch.autograd.profiler.record_function('truncate'):
+            with torch.autograd.profiler.record_function("truncate"):
                 assert self.w_avg_beta is not None
                 if self.num_ws is None or truncation_cutoff is None:
                     x = self.w_avg.lerp(x, truncation_psi)
                 else:
-                    x[:, :truncation_cutoff] = self.w_avg.lerp(x[:, :truncation_cutoff], truncation_psi)
+                    x[:, :truncation_cutoff] = self.w_avg.lerp(
+                        x[:, :truncation_cutoff], truncation_psi,
+                    )
         return x
 
     def extra_repr(self):
-        return f'z_dim={self.z_dim:d}, c_dim={self.c_dim:d}, w_dim={self.w_dim:d}, num_ws={self.num_ws:d}'
+        return f"z_dim={self.z_dim:d}, c_dim={self.c_dim:d}, w_dim={self.w_dim:d}, num_ws={self.num_ws:d}"
 
-#----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
 
 # def adm_discriminator(**kwargs):
 #     init = dict(init_mode='kaiming_uniform', init_weight=np.sqrt(1/3), init_bias=np.sqrt(1/3))

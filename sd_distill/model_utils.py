@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 import torch
 
@@ -81,3 +83,68 @@ def create_ema_and_scales_fn(
         return float(target_ema), int(scales)
 
     return ema_and_scales_fn
+
+
+class LossRecord:
+    def __init__(self, register_key=["fm_losses", "con_losses", "rf_losses"]):
+        self.times = np.array([])
+        self.register_key = register_key
+        self.losses = {}
+        for key in register_key:
+            self.losses[key] = np.array([])
+
+    def reset(self):
+        self.times = np.array([])
+        for key in self.register_key:
+            self.losses[key] = np.array([])
+
+    def plot(self, save_path):
+        import matplotlib.pyplot as plt
+
+        plt.figure(figsize=(20, 5))
+        order = np.argsort(self.times)
+        for key in self.register_key:
+            plt.plot(self.times[order], self.losses[key][order], label=key)
+        plt.xlabel("times")
+        plt.ylabel("losses")
+        plt.yscale("log")
+        plt.legend(loc="lower left")
+        plt.savefig(save_path)
+
+    def add(self, t, track_loss):
+        # t = deepcopy(t)
+        # track_loss = deepcopy(track_loss)
+        t = t.detach().float().cpu().numpy()
+        t = t.squeeze()
+        for key in self.register_key:
+            self.losses[key] = np.concatenate(
+                (
+                    self.losses[key],
+                    track_loss[key].detach().squeeze().float().cpu().numpy(),
+                ),
+            )
+        self.times = np.concatenate((self.times, t.reshape(-1)))
+
+
+class EMAMODEL:
+    def __init__(self, model):
+        self.ema_model = copy.deepcopy(model)
+        for parameter in self.ema_model.parameters():
+            parameter.requires_grad_(False)
+        self.ema_model.eval()
+
+    @torch.no_grad()
+    def ema_step(self, decay_rate=0.9999, model=None):
+        for param, ema_param in zip(model.parameters(), self.ema_model.parameters()):
+            ema_param.data.mul_(decay_rate).add_(param.data, alpha=1.0 - decay_rate)
+
+    @torch.no_grad()
+    def ema_swap(self, model=None):
+        for param, ema_param in zip(self.ema_model.parameters(), model.parameters()):
+            tmp = param.data.detach()
+            param.data = ema_param.detach()
+            ema_param.data = tmp
+
+    @torch.no_grad()
+    def __call__(self, t, z, **kwargs):
+        return self.ema_model(t, z, **kwargs)

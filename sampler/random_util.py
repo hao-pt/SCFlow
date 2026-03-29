@@ -1,6 +1,7 @@
 import torch as th
 import torch.distributed as dist
 
+
 def dev():
     """
     Get the device to use for torch.distributed.
@@ -13,12 +14,11 @@ def dev():
 def get_generator(generator, num_samples=0, seed=0):
     if generator == "dummy":
         return DummyGenerator()
-    elif generator == "determ":
+    if generator == "determ":
         return DeterministicGenerator(num_samples, seed)
-    elif generator == "determ-indiv":
+    if generator == "determ-indiv":
         return DeterministicIndividualGenerator(num_samples, seed)
-    else:
-        raise NotImplementedError
+    raise NotImplementedError
 
 
 class DummyGenerator:
@@ -62,9 +62,9 @@ class DeterministicGenerator:
             self.world_size,
         )
         indices = th.clamp(indices, 0, self.num_samples - 1)
-        assert (
-            len(indices) == size[0]
-        ), f"rank={self.rank}, ws={self.world_size}, l={len(indices)}, bs={size[0]}"
+        assert len(indices) == size[0], (
+            f"rank={self.rank}, ws={self.world_size}, l={len(indices)}, bs={size[0]}"
+        )
         return global_size, indices
 
     def get_generator(self, device):
@@ -81,7 +81,7 @@ class DeterministicGenerator:
         global_size, indices = self.get_global_size_and_indices(size)
         generator = self.get_generator(device)
         return th.randint(
-            low, high, generator=generator, size=global_size, dtype=dtype, device=device
+            low, high, generator=generator, size=global_size, dtype=dtype, device=device,
         )[indices]
 
     def randn_like(self, tensor):
@@ -130,9 +130,9 @@ class DeterministicIndividualGenerator:
             self.world_size,
         )
         indices = th.clamp(indices, 0, self.num_samples - 1)
-        assert (
-            len(indices) == size[0]
-        ), f"rank={self.rank}, ws={self.world_size}, l={len(indices)}, bs={size[0]}"
+        assert len(indices) == size[0], (
+            f"rank={self.rank}, ws={self.world_size}, l={len(indices)}, bs={size[0]}"
+        )
         return (1, *size[1:]), indices
 
     def get_generator(self, device):

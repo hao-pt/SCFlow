@@ -4,10 +4,16 @@ torchdiffeq
 ml_collections
 omegaconf
 timm
-# ninja
+ninja
 blobfile
 pot
 pandas
 einops
 opencv-python
 scikit-image
+accelerate
+matplotlib
+datasets
+typer
+transformers
+peft

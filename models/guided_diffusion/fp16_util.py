@@ -4,7 +4,7 @@ Helpers to train with 16-bit precision.
 
 import numpy as np
 import torch as th
-import torch.nn as nn
+from torch import nn
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 
 from . import logger
@@ -12,24 +12,24 @@ from . import logger
 INITIAL_LOG_LOSS_SCALE = 20.0
 
 
-def convert_module_to_f16(l):
+def convert_module_to_f16(module):
     """
     Convert primitive modules to float16.
     """
-    if isinstance(l, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
-        l.weight.data = l.weight.data.half()
-        if l.bias is not None:
-            l.bias.data = l.bias.data.half()
+    if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+        module.weight.data = module.weight.data.half()
+        if module.bias is not None:
+            module.bias.data = module.bias.data.half()
 
 
-def convert_module_to_f32(l):
+def convert_module_to_f32(module):
     """
     Convert primitive modules to float32, undoing convert_module_to_f16().
     """
-    if isinstance(l, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
-        l.weight.data = l.weight.data.float()
-        if l.bias is not None:
-            l.bias.data = l.bias.data.float()
+    if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+        module.weight.data = module.weight.data.float()
+        if module.bias is not None:
+            module.bias.data = module.bias.data.float()
 
 
 def make_master_params(param_groups_and_shapes):
@@ -41,8 +41,8 @@ def make_master_params(param_groups_and_shapes):
     for param_group, shape in param_groups_and_shapes:
         master_param = nn.Parameter(
             _flatten_dense_tensors(
-                [param.detach().float() for (_, param) in param_group]
-            ).view(shape)
+                [param.detach().float() for (_, param) in param_group],
+            ).view(shape),
         )
         master_param.requires_grad = True
         master_params.append(master_param)
@@ -55,10 +55,10 @@ def model_grads_to_master_grads(param_groups_and_shapes, master_params):
     from make_master_params().
     """
     for master_param, (param_group, shape) in zip(
-        master_params, param_groups_and_shapes
+        master_params, param_groups_and_shapes,
     ):
         master_param.grad = _flatten_dense_tensors(
-            [param_grad_or_zeros(param) for (_, param) in param_group]
+            [param_grad_or_zeros(param) for (_, param) in param_group],
         ).view(shape)
 
 
@@ -70,7 +70,7 @@ def master_params_to_model_params(param_groups_and_shapes, master_params):
     # silently not copy any parameters.
     for master_param, (param_group, _) in zip(master_params, param_groups_and_shapes):
         for (_, param), unflat_master_param in zip(
-            param_group, unflatten_master_params(param_group, master_param.view(-1))
+            param_group, unflatten_master_params(param_group, master_param.view(-1)),
         ):
             param.detach().copy_(unflat_master_param)
 
@@ -93,15 +93,15 @@ def get_param_groups_and_shapes(named_model_params):
 
 
 def master_params_to_state_dict(
-    model, param_groups_and_shapes, master_params, use_fp16
+    model, param_groups_and_shapes, master_params, use_fp16,
 ):
     if use_fp16:
         state_dict = model.state_dict()
         for master_param, (param_group, _) in zip(
-            master_params, param_groups_and_shapes
+            master_params, param_groups_and_shapes,
         ):
             for (name, _), unflat_master_param in zip(
-                param_group, unflatten_master_params(param_group, master_param.view(-1))
+                param_group, unflatten_master_params(param_group, master_param.view(-1)),
             ):
                 assert name in state_dict
                 state_dict[name] = unflat_master_param
@@ -141,8 +141,7 @@ def zero_grad(model_params):
 def param_grad_or_zeros(param):
     if param.grad is not None:
         return param.grad.data.detach()
-    else:
-        return th.zeros_like(param)
+    return th.zeros_like(param)
 
 
 class MixedPrecisionTrainer:
@@ -165,7 +164,7 @@ class MixedPrecisionTrainer:
 
         if self.use_fp16:
             self.param_groups_and_shapes = get_param_groups_and_shapes(
-                self.model.named_parameters()
+                self.model.named_parameters(),
             )
             self.master_params = make_master_params(self.param_groups_and_shapes)
             self.model.convert_to_fp16()
@@ -175,7 +174,7 @@ class MixedPrecisionTrainer:
 
     def backward(self, loss: th.Tensor):
         if self.use_fp16:
-            loss_scale = 2 ** self.lg_loss_scale
+            loss_scale = 2**self.lg_loss_scale
             (loss * loss_scale).backward()
         else:
             loss.backward()
@@ -183,13 +182,12 @@ class MixedPrecisionTrainer:
     def optimize(self, opt: th.optim.Optimizer):
         if self.use_fp16:
             return self._optimize_fp16(opt)
-        else:
-            return self._optimize_normal(opt)
+        return self._optimize_normal(opt)
 
     def _optimize_fp16(self, opt: th.optim.Optimizer):
         logger.logkv_mean("lg_loss_scale", self.lg_loss_scale)
         model_grads_to_master_grads(self.param_groups_and_shapes, self.master_params)
-        grad_norm, param_norm = self._compute_norms(grad_scale=2 ** self.lg_loss_scale)
+        grad_norm, param_norm = self._compute_norms(grad_scale=2**self.lg_loss_scale)
         if check_overflow(grad_norm):
             self.lg_loss_scale -= 1
             logger.log(f"Found NaN, decreased lg_loss_scale to {self.lg_loss_scale}")
@@ -200,7 +198,7 @@ class MixedPrecisionTrainer:
         logger.logkv_mean("param_norm", param_norm)
 
         for p in self.master_params:
-            p.grad.mul_(1.0 / (2 ** self.lg_loss_scale))
+            p.grad.mul_(1.0 / (2**self.lg_loss_scale))
         opt.step()
         zero_master_grads(self.master_params)
         master_params_to_model_params(self.param_groups_and_shapes, self.master_params)
@@ -226,7 +224,7 @@ class MixedPrecisionTrainer:
 
     def master_params_to_state_dict(self, master_params):
         return master_params_to_state_dict(
-            self.model, self.param_groups_and_shapes, master_params, self.use_fp16
+            self.model, self.param_groups_and_shapes, master_params, self.use_fp16,
         )
 
     def state_dict_to_master_params(self, state_dict):

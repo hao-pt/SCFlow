@@ -1,169 +1,183 @@
-# Latent Flow Matching
+<div align="center">
+<h1>Official PyTorch Implementation of "Self-Corrected Flow Distillation for Consistent One-Step and Few-Step Text-to-Image Generation" <a href="https://arxiv.org/abs/2412.16906">(AAAI 2025)</a></h1>
+</div>
+
+<div align="center">
+  <a href="https://quandao10.github.io/" target="_blank">Quan&nbsp;Dao</a><sup>*12†</sup> &emsp; <b>&middot;</b> &emsp;
+  <a href="https://hao-pt.github.io/" target="_blank">Hao&nbsp;Phung</a><sup>*13†</sup> &emsp; <b>&middot;</b> &emsp;
+  <a href="https://trung-dt.com/" target="_blank">Trung&nbsp;Dao</a><sup>1</sup> &emsp; <b>&middot;</b> &emsp;
+  <a href="https://people.cs.rutgers.edu/~dnm/" target="_blank">Dimitris&nbsp;N. Metaxas</a><sup>2</sup> &emsp; <b>&middot;</b> &emsp;
+  <a href="https://sites.google.com/site/anhttranusc/" target="_blank">Anh&nbsp;Tran</a><sup>1</sup>
+  <br> <br>
+  <sup>1</sup>VinAI Research &emsp;
+  <sup>2</sup>Rutgers University &emsp;
+  <sup>3</sup>Cornell University
+  <br> <br>
+  <a href="https://arxiv.org/abs/2412.16906">[Paper]</a>
+  <br> <br>
+  <emp><sup>*</sup>Equal contribution</emp> &emsp;
+  <emp><sup>†</sup>Work done while at VinAI Research</emp>
+</div>
+
+<br>
+
+<img src="assets/teaser.png" width="100%">
+
+**TLDR:** We introduce a self-corrected flow distillation method that integrates consistency models and adversarial training within the flow-matching framework, enabling consistent generation quality in both one-step and few-step sampling.
+
+---
+
+<details>
+<summary><b>Table of Contents</b></summary>
+
+- [Abstract](#abstract)
+- [Method](#method)
+- [Installation](#installation)
+- [Data](#data)
+- [Checkpoints](#checkpoints)
+- [Inference](#inference)
+- [Evaluation](#evaluation)
+- [Training](#training)
+- [Acknowledgment](#acknowledgment)
+- [Contacts](#contacts)
+
+</details>
+
+
+> Abstract: Flow matching has emerged as a promising framework for training generative models, demonstrating impressive empirical performance while offering relative ease of training compared to diffusion-based models. However, this method still requires numerous function evaluations in the sampling process. To address these limitations, we introduce a self-corrected flow distillation method that effectively integrates consistency models and adversarial training within the flow-matching framework. This work is a pioneer in achieving consistent generation quality in both few-step and one-step sampling. Our extensive experiments validate the effectiveness of our method, yielding superior results both quantitatively and qualitatively on CelebA-HQ and zero-shot benchmarks on the COCO dataset.
+
+Details of the model architecture and experimental results can be found in [our paper](https://arxiv.org/abs/2412.16906).
+
+```bibtex
+@inproceedings{dao2025scflow,
+  title     = {Self-Corrected Flow Distillation for Consistent One-Step and Few-Step Text-to-Image Generation},
+  author    = {Quan Dao and Hao Phung and Trung Dao and Dimitris Metaxas and Anh Tran},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence},
+  year      = {2025}
+}
+```
+
+Please **CITE** our paper and give us a :star: whenever this repository is used to help produce published results or incorporated into other software.
+
+---
 
 ## Installation
 
-Python `3.10` and Pytorch `1.13.1`/`2.0.0` are used in this implementation.
-Please install required libraries:
+Tested on Linux with Python 3.10 and PyTorch 2.1.0.
 
-```
+```shell
+conda create -n scflow python=3.10
+conda activate scflow
 pip install -r requirements.txt
 ```
 
-## Dataset preparation
 
-For CelebA HQ 256 and FFHQ 256 please check [NVAE's instructions](https://github.com/NVlabs/NVAE#set-up-file-paths-and-data) out.
+## Data
 
-For higher resolution datasets (CelebA HQ 512 & 1024), please refer to [WaveDiff's documents](https://github.com/VinAIResearch/WaveDiff#dataset-preparation).
+### Unconditional generation
 
-For ImageNet dataset, please download it directly from [the official website](https://www.image-net.org/download.php).
-
-## Pretrained VAE encoder
-Please download it [here](https://drive.google.com/file/d/16No4pSk5qcDXRPmCmCCnD0jjoA4FIL8S/view?usp=drive_link).
-
-## Training
-
-All training scripts are wrapped in [run.sh](bash_scripts/run.sh). Simply comment/uncomment the relevant commands and run `bash run.sh`.
-
-## Testing
-
-Run [run_test.sh](bash_scripts/run_test.sh) / [run_test_cls.sh](bash_scripts/run_test_cls.sh) with corresponding argument's file.
-
-```
-bash run_test.sh <path_to_arg_file>
-```
-
-> Only 1 gpu is required.
-
-<details>
-
-<summary>These arguments are specified as follows:</summary>
+**CelebA-HQ 256:** Download our preprocessed lmdb as follow:
 
 ```bash
-MODEL_TYPE=DiT-L/2
-EPOCH_ID=475
-DATASET=celeba_256
-EXP=celeb_f8_dit
-METHOD=dopri5
-STEPS=0
-USE_ORIGIN_ADM=True
-IMG_SIZE=256
+mkdir data/
+cd data/
+gdown --fuzzy https://drive.google.com/file/d/12NJYQv9lOZoVFcQgUeBaA0noYdewQ3lE/view?usp=sharing -O data/
+unzip celeba-lmdb.zip
+cd ../
 ```
 
-</details>
+### Text-to-Image generation
 
-Detailed arguments and checkpoints are provided below:
+We use a 2M-sample subset of LAION with aesthetic score > 6.25. Equivalently, [laion/aesthetics_v2_6_5plus](https://dagshub.com/datasets/laion-aesthetics-v2-6-5/) is a subset of ~3M images with at aesthetic score >=6.5 that is publicly available. 
+
+To precompute latents for a dataset for faster training:
+```bash
+pip install dagshub
+python sd_distill/precomputed_data.py \
+    --datadir laion/aesthetics_v2_6_5plus \
+    --cache_dir ./data/laion_aesthetics_v2_6_5plus \
+    --save_path ./data/laion_aesthetics_v2_6_5plus/latent_laion_aes/ \
+    --num_samples 200 \
+    --batch_size 64
+```
+
+### Pre-computed FID Statistics
+
+Download pre-computed dataset stats for CelebA-HQ dataset [here](https://drive.google.com/file/d/1xuqt8KU_GiuiaTmHUhgMErC0r4jwwKvv/view?usp=drive_link) and place them in `pytorch_fid/`.
+
+## Checkpoints
+
+### Pretrained Teacher Models
 
 <table>
   <tr>
-    <th>Exp</th>
-    <th>Args</th>
+    <th>Model</th>
     <th>FID</th>
-    <th>Checkpoints</th>
-  </tr>
-
-  <tr>
-    <td> celeb_f8_dit </td>
-    <td><a href="test_args/celeb256_dit.txt"> test_args/celeb256_dit.txt</a></td>
-    <td>5.26</td>
-    <td><a href="https://drive.google.com/drive/folders/1tbd1t0Yt3ix1v_OCGWJ7xyeubhCi99ql?usp=share_link">model_475.pth</a></td>
-  </tr>
-
-  <tr>
-    <td> ffhq_f8_dit </td>
-    <td><a href="test_args/ffhq_dit.txt"> test_args/ffhq_dit.txt</a></td>
-    <td>4.55</td>
-    <td><a href="https://drive.google.com/drive/folders/1jn6xHlaQ72hKk9RtJKo5lvr7SvYMCobU?usp=share_link">model_475.pth</a></td>
+    <th>Download</th>
   </tr>
   <tr>
-    <td> imnet_f8_ditb2 </td>
-    <td><a href="test_args/imnet_dit.txt"> test_args/imnet_dit.txt</a></td>
-    <td>4.46</td>
-    <td><a href="https://drive.google.com/file/d/1SUc9M85WOfi4CZfRJkpf2tDu3g9dC3YI/view?usp=sharing">model_875.pth</a></td>
+    <td>celeba_f8_adm</td>
+    <td>5.67</td>
+    <td><a href="https://drive.google.com/file/d/1AIuMr5Ewti6_wQAJdM9elsrERwrxI9Sb/view?usp=drive_link">model_480.pth</a></td>
   </tr>
-  <tr>
-    <td> celeb512_f8_adm </td>
-    <td><a href="test_args/celeb256_adm.txt"> test_args/celeb512_adm.txt</a></td>
-    <td>6.35</td>
-    <td><a href="https://drive.google.com/drive/folders/1lWE9hCqzZ2Q1mS2BmTsA3nYWB_T25wqV?usp=share_link">model_575.pth</a></td>
+    <tr>
+    <td>XCLiu/instaflow_0_9B_from_sd_1_5</td>
+    <td>13.10</td>
+    <td><a href="https://huggingface.co/XCLiu/instaflow_0_9B_from_sd_1_5">XCLiu/instaflow_0_9B_from_sd_1_5</a></td>
   </tr>
-  <tr>
-    <td> celeba_f8_adm </td>
-    <td><a href="test_args/celeb256_adm.txt"> test_args/celeb256_adm.txt</a></td>
-    <td>5.82</td>
-    <td>---</td>
-  </tr>
-  <tr>
-    <td> ffhq_f8_adm </td>
-    <td><a href="test_args/ffhq_adm.txt"> test_args/ffhq_adm.txt</a></td>
-    <td>6.12</td>
-    <td>---</td>
-  </tr>
-  <tr>
-    <td> imnet_f8_adm </td>
-    <td><a href="test_args/imnet_adm.txt"> test_args/imnet_adm.txt</a></td>
-    <td>8.58</td>
-    <td>---</td>
-  </tr>
-  <tr>
-    <td> celeba_f8_adm_distill </td>
-    <td><a href="test_args/celeb256_adm.txt"> test_args/celeb256_adm.txt</a></td>
-    <td>10.69</td>
-    <td>---</td>
-  </tr>
-  
-
 </table>
 
-Remaining models are put at [here](https://drive.google.com/drive/folders/1sJhl9gR0H4cIQJ3rVjJAqcOHZ8jpNVte?usp=sharing).
-> All attached links are made by an anonymous account.
->
-All models: https://drive.google.com/file/d/1_6HlS_tTKBrvlHDQiVYsMyREBlIL6Nvg/view?usp=drive_link
+To download all checkpoints at once, run:
 
-Please put downloaded pre-trained models in `saved_info/latent_flow/<DATASET>/<EXP>` directory where `<DATASET>` is defined as in [bash_scripts/run.sh](./bash_scripts/run.sh).
-
-<details>
-<summary>Utilities</summary>
-
-To measure time, please add `--measure_time` in the script.
-
-To compute the number of function evaluations of adaptive solver (default: `dopri5`), please add `--compute_nfe` in the script.
-
-To use fixed-steps solver (e.g. `euler` and `heun`), please add `--use_karras_samplers` and change two arguments as follow:
-
-```
-METHOD=heun
-STEPS=50
+```shell
+bash tools/download_pretrained.sh
 ```
 
-</details>
+Checkpoints will be saved under the `pretrained/` folder.
 
-### Evaluation
+## Inference
 
-To evaluate FID scores, please download pre-computed stats from [here](https://drive.google.com/drive/folders/1BXCqPUD36HSdrOHj2Gu_vFKA3M3hJspI?usp=share_link) and put it to `pytorch_fid`.
+### Unconditional Generation
 
-Please add `--compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log \` in `run_test.sh` for unconditional generation and 
-Then run `bash run_test_ddp.sh` for unconditional generation or `run_test_cls` for conditional generation. By default, multi-gpu sampling with 8 GPUs is supported for faster compute.
-
-<details>
-<summary>Computing stats for new dataset</summary>
-
-`pytorch_fid/compute_dataset_stat.py` is provided for this purpose.
-
-```bash
-python pytorch_fid/compute_dataset_stat.py \
-  --dataset <dataset> --datadir <path_to_data> \
-  --image_size <image_size> --save_path <path_to_save>
+```shell
+bash tools/test.sh
 ```
 
-</details>
+### Text-to-Image Generation
 
-## Distillation for few-step generation
-Training:
-```
-bash run_reflow.sh
-```
-Test:
-```
-bash run_test_consistent.sh
+```shell
+bash tools/infer_instaflow.sh
 ```
 
+## Evaluation
+
+To evaluate on CelebA-HQ, add the following flags to [tools/test_adm.sh](tools/test_adm.sh) to enable FID computation:
+
+```shell
+--compute_fid --output_log ${EXP}_${EPOCH_ID}_${METHOD}${STEPS}.log
+```
+
+Multi-GPU sampling with 8 GPUs is supported by default for faster evaluation.
+
+
+## Training
+
+### Unconditional Generation
+
+```shell
+bash tools/train.sh
+```
+
+### Text-to-Image Generation
+
+```shell
+bash tools/train_instaflow.sh
+```
+
+## Acknowledgment
+
+This codebase builds upon [Flow Matching in Latent Space (LFM)](https://github.com/VinAIResearch/LFM.git). We also thank the authors of [LCM](https://github.com/luosiallen/latent-consistency-model), [Rectified Flow](https://github.com/gnobitab/RectifiedFlow), and [InstaFlow](https://github.com/gnobitab/InstaFlow) for their great work and publicly available codebases that facilitated this research.
+
+## Contacts
+
+If you have any problems, please open an issue in this repository or send an email to **tienhaophung@gmail.com**.

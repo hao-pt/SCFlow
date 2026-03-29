@@ -7,20 +7,41 @@
 
 
 import numpy as np
-from PIL import Image
 import torchvision.datasets as dset
-import torchvision.transforms as transforms
+from PIL import Image
+from torchvision import transforms
 
 
 class StackedMNIST(dset.MNIST):
-    def __init__(self, root, train=True, transform=None, target_transform=None,
-                 download=False):
-        super(StackedMNIST, self).__init__(root=root, train=train, transform=transform,
-                                           target_transform=target_transform, download=download)
+    def __init__(
+        self, root, train=True, transform=None, target_transform=None, download=False,
+    ):
+        super().__init__(
+            root=root,
+            train=train,
+            transform=transform,
+            target_transform=target_transform,
+            download=download,
+        )
 
-        index1 = np.hstack([np.random.permutation(len(self.data)), np.random.permutation(len(self.data))])
-        index2 = np.hstack([np.random.permutation(len(self.data)), np.random.permutation(len(self.data))])
-        index3 = np.hstack([np.random.permutation(len(self.data)), np.random.permutation(len(self.data))])
+        index1 = np.hstack(
+            [
+                np.random.permutation(len(self.data)),
+                np.random.permutation(len(self.data)),
+            ],
+        )
+        index2 = np.hstack(
+            [
+                np.random.permutation(len(self.data)),
+                np.random.permutation(len(self.data)),
+            ],
+        )
+        index3 = np.hstack(
+            [
+                np.random.permutation(len(self.data)),
+                np.random.permutation(len(self.data)),
+            ],
+        )
         self.num_images = 2 * len(self.data)
 
         self.index = []
@@ -34,7 +55,10 @@ class StackedMNIST(dset.MNIST):
         img = np.zeros((28, 28, 3), dtype=np.uint8)
         target = 0
         for i in range(3):
-            img_, target_ = self.data[self.index[index][i]], int(self.targets[self.index[index][i]])
+            img_, target_ = (
+                self.data[self.index[index][i]],
+                int(self.targets[self.index[index][i]]),
+            )
             img[:, :, i] = img_
             target += target_ * 10 ** (2 - i)
 
@@ -48,18 +72,23 @@ class StackedMNIST(dset.MNIST):
 
         return img, target
 
+
 def _data_transforms_stacked_mnist():
     """Get data transforms for cifar10."""
-    train_transform = transforms.Compose([
-        transforms.Pad(padding=2),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))
-    ])
+    train_transform = transforms.Compose(
+        [
+            transforms.Pad(padding=2),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        ],
+    )
 
-    valid_transform = transforms.Compose([
-        transforms.Pad(padding=2),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))
-    ])
+    valid_transform = transforms.Compose(
+        [
+            transforms.Pad(padding=2),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        ],
+    )
 
     return train_transform, valid_transform

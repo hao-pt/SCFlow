@@ -1,11 +1,8 @@
 import numpy as np
-
 import torch as th
-import torch.nn as nn
-import torch.nn.functional as F
 
-from .nn import mean_flat, append_dims, append_zero
 from .random_util import get_generator
+
 
 def karras_sample(
     model,
@@ -41,36 +38,42 @@ def karras_sample(
 
     if sampler in ["heun", "dpm"]:
         sampler_args = dict(
-            s_churn=s_churn, s_tmin=s_tmin, s_tmax=s_tmax, s_noise=s_noise
+            s_churn=s_churn, s_tmin=s_tmin, s_tmax=s_tmax, s_noise=s_noise,
         )
     elif sampler == "multistep":
         sampler_args = dict(
-            ts=ts, t_min=sigma_min, t_max=sigma_max, rho=rho, steps=steps
+            ts=ts, t_min=sigma_min, t_max=sigma_max, rho=rho, steps=steps,
         )
     elif sampler == "stochastic":
         sampler_args = dict(
-            s_churn=s_churn, s_tmin=s_tmin, s_tmax=s_tmax, s_noise=s_noise,
-            t_min=sigma_min, t_max=sigma_max, rho=rho, steps=steps,
+            s_churn=s_churn,
+            s_tmin=s_tmin,
+            s_tmax=s_tmax,
+            s_noise=s_noise,
+            t_min=sigma_min,
+            t_max=sigma_max,
+            rho=rho,
+            steps=steps,
         )
     else:
         sampler_args = {}
 
     def denoiser(x_t, sigma):
-        if model_kwargs.get("cfg_scale", 1.) > 1.:
+        if model_kwargs.get("cfg_scale", 1.0) > 1.0:
             denoised = model.forward_with_cfg(sigma, x_t, **model_kwargs)
         else:
             denoised = model(sigma, x_t, **model_kwargs)
         if clip_denoised:
             denoised = denoised.clamp(-1, 1)
         return denoised
-    
+
     def cls_denoiser(x_t, sigma):
         # if model_kwargs.get("cfg_scale", 1.) > 1.:
         #     vec = model.forward_with_cfg(sigma, x_t, **model_kwargs)
         # else:
         #     vec = model(sigma, x_t, **model_kwargs)
         vec = model(sigma, x_t)
-        cond_vec = cond_func(classifier, x_t, 1.-sigma, **model_kwargs)
+        cond_vec = cond_func(classifier, x_t, 1.0 - sigma, **model_kwargs)
         return vec + cond_vec
 
     if classifier is not None:
@@ -99,7 +102,7 @@ def karras_sample(
 def to_d(x, sigma, denoised):
     """Converts a denoiser output to a Karras ODE derivative."""
     # return (x - denoised) / append_dims(sigma, x.ndim)
-    return x # identity for flow matching
+    return x  # identity for flow matching
 
 
 @th.no_grad()
@@ -131,7 +134,7 @@ def sample_euler(
                     "i": i,
                     "sigma": sigmas[i],
                     "denoised": denoised,
-                }
+                },
             )
         dt = sigmas[i + 1] - sigma
         x = x + d * dt
@@ -150,7 +153,7 @@ def sample_heun(
     t_max=80.0,
     rho=7.0,
     steps=40,
-    s_churn=0.,
+    s_churn=0.0,
     s_tmin=0.0,
     s_tmax=float("inf"),
     s_noise=1.0,
@@ -166,13 +169,15 @@ def sample_heun(
     t_steps = sigmas
 
     x_next = x
-    for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])): # 0, ..., N-1
+    for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])):  # 0, ..., N-1
         x_cur = x_next
 
         # Increase noise temporarily.
         gamma = min(s_churn / steps, np.sqrt(2) - 1) if s_tmin <= t_cur <= s_tmax else 0
         t_hat = th.as_tensor(t_cur + gamma * t_cur)
-        x_hat = x_cur + (t_hat ** 2 - t_cur ** 2).sqrt() * s_noise * generator.randn_like(x_cur)
+        x_hat = x_cur + (t_hat**2 - t_cur**2).sqrt() * s_noise * generator.randn_like(
+            x_cur,
+        )
 
         # Euler step.
         denoised = distiller(x_hat, t_hat * s_in)
@@ -187,5 +192,5 @@ def sample_heun(
             # d_prime = (x_next - denoised) / t_next
             d_prime = denoised
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
-    
+
     return x_next

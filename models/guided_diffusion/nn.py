@@ -5,7 +5,7 @@ Various utilities for neural networks.
 import math
 
 import torch as th
-import torch.nn as nn
+from torch import nn
 
 
 # PyTorch 1.7 has SiLU, but we support PyTorch 1.5.
@@ -25,9 +25,9 @@ def conv_nd(dims, *args, **kwargs):
     """
     if dims == 1:
         return nn.Conv1d(*args, **kwargs)
-    elif dims == 2:
+    if dims == 2:
         return nn.Conv2d(*args, **kwargs)
-    elif dims == 3:
+    if dims == 3:
         return nn.Conv3d(*args, **kwargs)
     raise ValueError(f"unsupported dimensions: {dims}")
 
@@ -45,9 +45,9 @@ def avg_pool_nd(dims, *args, **kwargs):
     """
     if dims == 1:
         return nn.AvgPool1d(*args, **kwargs)
-    elif dims == 2:
+    if dims == 2:
         return nn.AvgPool2d(*args, **kwargs)
-    elif dims == 3:
+    if dims == 3:
         return nn.AvgPool3d(*args, **kwargs)
     raise ValueError(f"unsupported dimensions: {dims}")
 
@@ -112,7 +112,7 @@ def timestep_embedding(timesteps, dim, max_period=10000):
     """
     half = dim // 2
     freqs = th.exp(
-        -math.log(max_period) * th.arange(start=0, end=half, dtype=th.float32) / half
+        -math.log(max_period) * th.arange(start=0, end=half, dtype=th.float32) / half,
     ).to(device=timesteps.device)
     args = timesteps[:, None].float() * freqs[None]
     embedding = th.cat([th.cos(args), th.sin(args)], dim=-1)
@@ -135,8 +135,7 @@ def checkpoint(func, inputs, params, flag):
     if flag:
         args = tuple(inputs) + tuple(params)
         return CheckpointFunction.apply(func, len(inputs), *args)
-    else:
-        return func(*inputs)
+    return func(*inputs)
 
 
 class CheckpointFunction(th.autograd.Function):
